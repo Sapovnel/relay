@@ -44,7 +44,6 @@ export default function Home() {
   }, [user]);
 
   const handleCreate = async () => {
-    console.log('[Home] handleCreate called', { name, language, creating });
     if (!name.trim() || creating) return;
     setError(null);
     setCreating(true);
@@ -55,7 +54,6 @@ export default function Home() {
         credentials: 'include',
         body: JSON.stringify({ name, language }),
       });
-      console.log('[Home] POST /rooms status', res.status);
       if (!res.ok) {
         const body = await res.text();
         setError(`server said ${res.status}: ${body.slice(0, 200)}`);
@@ -65,7 +63,6 @@ export default function Home() {
       setRooms((prev) => [newRoom, ...prev]);
       setName('');
     } catch (e) {
-      console.error('[Home] create failed:', e);
       setError(e instanceof Error ? e.message : 'network error');
     } finally {
       setCreating(false);

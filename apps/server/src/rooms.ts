@@ -79,6 +79,44 @@ router.get('/:id', async (req, res: Response) => {
   res.json(toDTO(doc));
 });
 
+router.patch('/:id', async (req, res: Response) => {
+  const user = (req as unknown as AuthedReq).user;
+  const { id } = req.params;
+  if (!id || !ObjectId.isValid(id)) {
+    res.status(400).json({ error: 'bad id' });
+    return;
+  }
+  const body = req.body as { language?: unknown; name?: unknown };
+  const update: Partial<RoomDoc> = {};
+  if (typeof body.language === 'string') {
+    if (!SUPPORTED_LANGUAGES.has(body.language)) {
+      res.status(400).json({ error: 'unsupported language' });
+      return;
+    }
+    update.language = body.language;
+  }
+  if (typeof body.name === 'string' && body.name.trim()) {
+    update.name = body.name.trim().slice(0, 100);
+  }
+  if (Object.keys(update).length === 0) {
+    res.status(400).json({ error: 'nothing to update' });
+    return;
+  }
+  const result = await rooms().findOneAndUpdate(
+    {
+      _id: new ObjectId(id),
+      $or: [{ ownerId: user.sub }, { memberIds: user.sub }],
+    },
+    { $set: update },
+    { returnDocument: 'after' },
+  );
+  if (!result) {
+    res.status(404).json({ error: 'not found or not a member' });
+    return;
+  }
+  res.json(toDTO(result));
+});
+
 router.post('/:id/join', async (req, res: Response) => {
   const user = (req as unknown as AuthedReq).user;
   const { id } = req.params;
