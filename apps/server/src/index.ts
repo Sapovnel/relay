@@ -8,6 +8,7 @@ import { env } from './env.js';
 import { connectMongo } from './mongo.js';
 import { setupPersistence } from './persistence.js';
 import { authRouter, getSessionFromCookie, type SessionUser } from './auth.js';
+import { roomsRouter, isMember } from './rooms.js';
 
 async function main() {
   await connectMongo();
@@ -17,6 +18,7 @@ async function main() {
   app.use(cookieParser());
   app.use(express.json());
   app.use('/auth', authRouter);
+  app.use('/rooms', roomsRouter);
   app.get('/health', (_req, res) => {
     res.json({ ok: true });
   });
@@ -24,13 +26,23 @@ async function main() {
   const server = createServer(app);
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on('upgrade', (req, socket, head) => {
+  server.on('upgrade', async (req, socket, head) => {
     const user = getSessionFromCookie(req.headers.cookie);
     if (!user) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
+
+    const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+    const docName = url.pathname.replace(/^\/+/, '');
+    const allowed = await isMember(docName, user.sub);
+    if (!allowed) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     wss.handleUpgrade(req, socket, head, (ws) => {
       (ws as typeof ws & { user: SessionUser }).user = user;
       wss.emit('connection', ws, req);
@@ -39,7 +51,7 @@ async function main() {
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
-    const docName = url.pathname.replace(/^\/+/, '') || 'default';
+    const docName = url.pathname.replace(/^\/+/, '');
     setupWSConnection(ws, req, { docName, gc: true });
     const user = (ws as typeof ws & { user: SessionUser }).user;
     console.log(`ws: "${user.login}" joined "${docName}"`);

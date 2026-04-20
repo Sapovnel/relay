@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import type { ReactElement } from 'react';
 import Home from './pages/Home';
 import Room from './pages/Room';
+import Join from './pages/Join';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 import './index.css';
 
@@ -23,6 +24,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           element={
             <Protected>
               <Room />
+            </Protected>
+          }
+        />
+        <Route
+          path="/join/:id"
+          element={
+            <Protected>
+              <Join />
             </Protected>
           }
         />

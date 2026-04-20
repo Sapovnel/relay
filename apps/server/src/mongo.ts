@@ -15,6 +15,14 @@ export interface UserDoc {
   createdAt: Date;
 }
 
+export interface RoomDoc {
+  ownerId: string;
+  name: string;
+  language: string;
+  createdAt: Date;
+  memberIds: string[];
+}
+
 let client: MongoClient | null = null;
 let db: Db | null = null;
 
@@ -25,6 +33,8 @@ export async function connectMongo(): Promise<void> {
   db = client.db(env.MONGO_DB);
   await db.collection<SnapshotDoc>('snapshots').createIndex({ roomId: 1 }, { unique: true });
   await db.collection<UserDoc>('users').createIndex({ githubId: 1 }, { unique: true });
+  await db.collection<RoomDoc>('rooms').createIndex({ ownerId: 1 });
+  await db.collection<RoomDoc>('rooms').createIndex({ memberIds: 1 });
   console.log(`mongo connected: ${env.MONGO_DB}`);
 }
 
@@ -43,6 +53,10 @@ export function snapshots(): Collection<SnapshotDoc> {
 
 export function users(): Collection<UserDoc> {
   return requireDb().collection<UserDoc>('users');
+}
+
+export function rooms(): Collection<RoomDoc> {
+  return requireDb().collection<RoomDoc>('rooms');
 }
 
 export async function closeMongo(): Promise<void> {
