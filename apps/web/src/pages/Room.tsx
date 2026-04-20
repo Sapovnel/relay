@@ -6,7 +6,12 @@ import { WebsocketProvider } from 'y-websocket';
 import { MonacoBinding } from 'y-monaco';
 import type { editor } from 'monaco-editor';
 
-const WS_URL = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'ws://localhost:4000';
+const WS_URL = ((): string => {
+  const fromEnv = import.meta.env.VITE_WS_URL as string | undefined;
+  if (fromEnv) return fromEnv;
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${window.location.host}/ws`;
+})();
 
 export default function Room() {
   const { id } = useParams();
