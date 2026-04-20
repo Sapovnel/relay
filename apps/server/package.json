@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "express": "^4.21.1",
+    "mongodb": "^6.10.0",
     "ws": "^8.18.0",
     "y-websocket": "^2.0.4",
     "yjs": "^13.6.20"
