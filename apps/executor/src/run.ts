@@ -18,22 +18,32 @@ export interface RunResult {
 
 interface LangConfig {
   image: string;
-  cmd: (code: string) => string[];
+  makeCmd: (code: string) => string[];
+  // If true, the runner reads source from stdin. If false, code travels through argv
+  // and stdin is NOT attached (otherwise the runtime hangs waiting for EOF).
+  viaStdin: boolean;
+  timeoutMs?: number;
 }
 
+// argv is always passed as an array — there is no shell interpolation, so code strings
+// going through argv are byte-safe. For languages that can't accept code on argv (Go
+// needs a real .go file), we use `sh -c 'cat > file && run file'` and pipe the code
+// through stdin.
 const LANGS: Record<string, LangConfig> = {
   javascript: {
     image: 'node:20-alpine',
-    cmd: (code) => ['node', '-e', code],
-  },
-  typescript: {
-    image: 'node:20-alpine',
-    cmd: (code) => ['node', '--input-type=module', '-e', code],
+    makeCmd: (code) => ['node', '-e', code],
+    viaStdin: false,
   },
   python: {
     image: 'python:3.12-alpine',
-    cmd: (code) => ['python3', '-c', code],
+    makeCmd: (code) => ['python3', '-c', code],
+    viaStdin: false,
   },
+  // Go is ready architecturally (the viaStdin + sh -c pipeline works for any language
+  // that needs a real file on disk), but `cat > file` over the attached stdin stream is
+  // hanging in this environment — likely a docker-modem HttpDuplex.end() quirk. Keeping
+  // the scaffolding but leaving Go disabled until that's diagnosed.
 };
 
 export function supportedLanguages(): string[] {
@@ -41,7 +51,7 @@ export function supportedLanguages(): string[] {
 }
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
-const TIMEOUT_MS = 5000;
+const DEFAULT_TIMEOUT_MS = 5000;
 
 function capture(stream: NodeJS.ReadableStream, cap: number) {
   const chunks: Buffer[] = [];
@@ -77,19 +87,28 @@ export async function run(language: string, code: string): Promise<RunResult> {
     };
   }
 
+  // Go compiler's build cache lives in /tmp; needs more space than a script runtime.
+  const tmpfsSize = language === 'go' ? '128m' : '16m';
+
   const started = Date.now();
   const container = await docker.createContainer({
     name: `codee-run-${randomUUID().slice(0, 8)}`,
     Image: cfg.image,
-    Cmd: cfg.cmd(code),
+    Cmd: cfg.makeCmd(code),
     User: 'nobody',
     WorkingDir: '/tmp',
-    Env: ['HOME=/tmp', 'NODE_OPTIONS=--no-warnings'],
+    Env: [
+      'HOME=/tmp',
+      'NODE_OPTIONS=--no-warnings',
+      'GOCACHE=/tmp/gocache',
+      'GOPATH=/tmp/gopath',
+    ],
     NetworkDisabled: true,
+    AttachStdin: cfg.viaStdin,
     AttachStdout: true,
     AttachStderr: true,
-    AttachStdin: false,
-    OpenStdin: false,
+    OpenStdin: cfg.viaStdin,
+    StdinOnce: cfg.viaStdin,
     Tty: false,
     StopTimeout: 0,
     HostConfig: {
@@ -99,18 +118,19 @@ export async function run(language: string, code: string): Promise<RunResult> {
       PidsLimit: 64,
       ReadonlyRootfs: true,
       CapDrop: ['ALL'],
-      Tmpfs: { '/tmp': 'rw,size=16m,nosuid,nodev' },
+      Tmpfs: { '/tmp': `rw,size=${tmpfsSize},nosuid,nodev,mode=1777` },
       NetworkMode: 'none',
       AutoRemove: false,
       SecurityOpt: ['no-new-privileges'],
     },
   });
 
+  const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let timedOut = false;
   const killTimer = setTimeout(() => {
     timedOut = true;
     container.kill({ signal: 'SIGKILL' }).catch(() => {});
-  }, TIMEOUT_MS);
+  }, timeoutMs);
 
   const stdoutStream = new PassThrough();
   const stderrStream = new PassThrough();
@@ -118,18 +138,29 @@ export async function run(language: string, code: string): Promise<RunResult> {
   const getStderr = capture(stderrStream, MAX_OUTPUT_BYTES);
 
   try {
-    const attachStream = await container.attach({
+    const attachStream = (await container.attach({
       stream: true,
+      stdin: cfg.viaStdin,
       stdout: true,
       stderr: true,
-    });
+    })) as NodeJS.ReadWriteStream;
+
     docker.modem.demuxStream(attachStream, stdoutStream, stderrStream);
     await container.start();
+
+    if (cfg.viaStdin) {
+      attachStream.write(code);
+      (attachStream as unknown as { end?: () => void }).end?.();
+    }
+
     const waitResult = await container.wait();
     clearTimeout(killTimer);
-    // Give demuxed streams a tick to flush
     await new Promise((r) => setImmediate(r));
-    (attachStream as unknown as { destroy?: () => void }).destroy?.();
+    try {
+      (attachStream as unknown as { destroy?: () => void }).destroy?.();
+    } catch {
+      // docker-modem's HttpDuplex.destroy can throw after stream.end() nulls its request.
+    }
     stdoutStream.end();
     stderrStream.end();
 
@@ -138,7 +169,7 @@ export async function run(language: string, code: string): Promise<RunResult> {
       const info = await container.inspect();
       oomKilled = info.State?.OOMKilled === true;
     } catch {
-      // ignore
+      // container may already be removed
     }
 
     return {

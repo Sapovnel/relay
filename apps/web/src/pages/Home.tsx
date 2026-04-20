@@ -27,6 +27,7 @@ export default function Home() {
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/auth/config')
@@ -74,6 +75,24 @@ export default function Home() {
     await navigator.clipboard.writeText(url);
     setCopied(id);
     setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500);
+  };
+
+  const handleDelete = async (room: Room) => {
+    if (!confirm(`Delete room "${room.name}"? This cannot be undone.`)) return;
+    setDeleting(room.id);
+    try {
+      const res = await fetch(`/rooms/${room.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (res.ok) {
+        setRooms((prev) => prev.filter((r) => r.id !== room.id));
+      } else {
+        setError(`delete failed: ${res.status}`);
+      }
+    } finally {
+      setDeleting(null);
+    }
   };
 
   return (
@@ -179,6 +198,15 @@ export default function Home() {
                     >
                       {copied === r.id ? 'copied!' : 'copy link'}
                     </button>
+                    {user && r.ownerId === user.sub && (
+                      <button
+                        onClick={() => handleDelete(r)}
+                        disabled={deleting === r.id}
+                        className="text-xs px-2 py-1 rounded border border-red-900 hover:bg-red-950 text-red-400 disabled:opacity-50"
+                      >
+                        {deleting === r.id ? '…' : 'delete'}
+                      </button>
+                    )}
                     <Link
                       to={`/room/${r.id}`}
                       className="text-xs px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium"

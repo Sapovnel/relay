@@ -1,7 +1,7 @@
 import express, { type Response, type Request } from 'express';
 import { ObjectId, type WithId } from 'mongodb';
 import { requireAuth, type SessionUser } from './auth.js';
-import { rooms, type RoomDoc } from './mongo.js';
+import { rooms, snapshots, type RoomDoc } from './mongo.js';
 import { env } from './env.js';
 // @ts-expect-error — y-websocket ships JS with no bundled types for this path
 import { docs } from 'y-websocket/bin/utils';
@@ -19,6 +19,8 @@ const SUPPORTED_LANGUAGES = new Set([
   'markdown',
   'plaintext',
 ]);
+
+export const RUNNABLE_LANGUAGES = new Set(['javascript', 'python']);
 
 function toDTO(r: WithId<RoomDoc>) {
   return {
@@ -136,6 +138,27 @@ router.post('/:id/join', async (req, res: Response) => {
   res.json(toDTO(result));
 });
 
+router.delete('/:id', async (req, res: Response) => {
+  const user = (req as unknown as AuthedReq).user;
+  const { id } = req.params;
+  if (!id || !ObjectId.isValid(id)) {
+    res.status(400).json({ error: 'bad id' });
+    return;
+  }
+  const result = await rooms().findOneAndDelete({
+    _id: new ObjectId(id),
+    ownerId: user.sub,
+  });
+  if (!result) {
+    res.status(404).json({ error: 'not found or not owner' });
+    return;
+  }
+  await snapshots()
+    .deleteOne({ roomId: id })
+    .catch(() => {});
+  res.json({ ok: true });
+});
+
 router.post('/:id/run', async (req, res: Response) => {
   const user = (req as unknown as AuthedReq).user;
   const { id } = req.params;
@@ -154,6 +177,10 @@ router.post('/:id/run', async (req, res: Response) => {
     return;
   }
 
+  if (!RUNNABLE_LANGUAGES.has(room.language)) {
+    res.status(400).json({ error: `language "${room.language}" is not runnable` });
+    return;
+  }
   const ydoc = (docs as Map<string, Y.Doc>).get(id);
   if (!ydoc) {
     res.status(400).json({ error: 'no active session for this room (open the room in a browser first)' });

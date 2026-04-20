@@ -1,6 +1,6 @@
 import { useParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type * as Monaco from 'monaco-editor';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
@@ -15,6 +15,7 @@ const WS_URL = ((): string => {
 })();
 
 const LANGUAGES = ['javascript', 'typescript', 'python', 'markdown', 'plaintext'];
+const RUNNABLE = new Set(['javascript', 'python']);
 const COLOR_PALETTE = [
   '#f43f5e',
   '#f59e0b',
@@ -54,6 +55,14 @@ interface RunView {
   error?: string;
 }
 
+interface ChatMsg {
+  id: string;
+  author: string;
+  color: string;
+  body: string;
+  at: number;
+}
+
 export default function Room() {
   const { id } = useParams();
   const roomId = id ?? 'unknown';
@@ -66,6 +75,12 @@ export default function Room() {
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [language, setLanguage] = useState('javascript');
   const [peerCount, setPeerCount] = useState(1);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [draft, setDraft] = useState('');
+  const [outputCopied, setOutputCopied] = useState(false);
+  const chatArrRef = useRef<Y.Array<ChatMsg> | null>(null);
+  const handleRunRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     fetch(`/rooms/${roomId}`, { credentials: 'include' })
@@ -120,7 +135,15 @@ export default function Room() {
     runMap.observe(readRun);
     readRun();
 
+    const chatArr = doc.getArray<ChatMsg>('chat');
+    chatArrRef.current = chatArr;
+    const readChat = () => setMessages(chatArr.toArray());
+    chatArr.observe(readChat);
+    readChat();
+
     return () => {
+      chatArr.unobserve(readChat);
+      chatArrRef.current = null;
       runMap.unobserve(readRun);
       provider.awareness.off('change', onAwareness);
       provider.off('status', onStatus);
@@ -130,8 +153,10 @@ export default function Room() {
     };
   }, [ed, roomId, user]);
 
+  const runnable = RUNNABLE.has(language);
+
   const handleRun = async () => {
-    if (triggering) return;
+    if (triggering || !runnable) return;
     setTriggering(true);
     try {
       await fetch(`/rooms/${roomId}/run`, { method: 'POST', credentials: 'include' });
@@ -139,6 +164,10 @@ export default function Room() {
       setTriggering(false);
     }
   };
+
+  useEffect(() => {
+    handleRunRef.current = handleRun;
+  });
 
   const handleLanguageChange = async (newLang: string) => {
     setLanguage(newLang);
@@ -150,13 +179,36 @@ export default function Room() {
     }).catch(() => {});
   };
 
+  const sendMsg = () => {
+    const arr = chatArrRef.current;
+    if (!arr || !user || !draft.trim()) return;
+    arr.push([
+      {
+        id: crypto.randomUUID(),
+        author: user.login,
+        color: colorFromId(user.sub),
+        body: draft,
+        at: Date.now(),
+      },
+    ]);
+    setDraft('');
+  };
+
+  const copyOutput = async () => {
+    if (!runOutput) return;
+    const text = [runOutput.stdout, runOutput.stderr].filter(Boolean).join('\n');
+    await navigator.clipboard.writeText(text);
+    setOutputCopied(true);
+    setTimeout(() => setOutputCopied(false), 1500);
+  };
+
   const statusColor =
     status === 'connected'
       ? 'bg-green-500'
       : status === 'connecting'
         ? 'bg-yellow-500'
         : 'bg-red-500';
-  const canRun = status === 'connected' && !triggering && runOutput?.status !== 'running';
+  const canRun = status === 'connected' && !triggering && runOutput?.status !== 'running' && runnable;
 
   return (
     <div
@@ -193,9 +245,16 @@ export default function Room() {
         <button
           onClick={handleRun}
           disabled={!canRun}
+          title={runnable ? 'Run (Ctrl+Enter)' : `${language} is not runnable`}
           className="ml-auto px-3 py-1 text-xs font-medium bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded text-white"
         >
           {runOutput?.status === 'running' ? 'Running…' : 'Run ▶'}
+        </button>
+        <button
+          onClick={() => setChatOpen((v) => !v)}
+          className="px-2 py-1 text-xs rounded border border-gray-800 hover:bg-gray-900 text-gray-300"
+        >
+          {chatOpen ? 'Hide chat' : `Chat${messages.length ? ` (${messages.length})` : ''}`}
         </button>
         <span className="text-xs text-gray-400 tabular-nums">
           {peerCount} {peerCount === 1 ? 'user' : 'users'}
@@ -205,26 +264,78 @@ export default function Room() {
           {status}
         </span>
       </header>
-      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        <div style={{ position: 'absolute', inset: 0 }}>
-          <Editor
-            key={roomId}
-            height="100%"
-            width="100%"
-            defaultLanguage={language}
-            theme="vs-dark"
-            onMount={(editor, monaco) => {
-              setEd(editor);
-              setMonacoNs(monaco);
-            }}
-            options={{
-              fontSize: 14,
-              minimap: { enabled: false },
-              scrollBeyondLastLine: false,
-              automaticLayout: true,
-            }}
-          />
+      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+          <div style={{ position: 'absolute', inset: 0 }}>
+            <Editor
+              key={roomId}
+              height="100%"
+              width="100%"
+              defaultLanguage={language}
+              theme="vs-dark"
+              onMount={(editor, monaco) => {
+                setEd(editor);
+                setMonacoNs(monaco);
+                editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+                  handleRunRef.current();
+                });
+              }}
+              options={{
+                fontSize: 14,
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+              }}
+            />
+          </div>
         </div>
+        {chatOpen && (
+          <aside
+            style={{
+              width: 280,
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              borderLeft: '1px solid rgb(31 41 55)',
+            }}
+          >
+            <div style={{ flex: 1, overflow: 'auto' }} className="p-3 space-y-2">
+              {messages.length === 0 ? (
+                <p className="text-xs text-gray-600">No messages yet.</p>
+              ) : (
+                messages.map((m) => (
+                  <div key={m.id}>
+                    <div className="text-xs font-medium" style={{ color: m.color }}>
+                      {m.author}
+                    </div>
+                    <div className="text-sm wrap-break-word whitespace-pre-wrap">{m.body}</div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div style={{ borderTop: '1px solid rgb(31 41 55)' }} className="p-2 flex gap-1">
+              <input
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMsg();
+                  }
+                }}
+                placeholder="Message…"
+                className="flex-1 px-2 py-1 text-xs bg-gray-900 border border-gray-800 rounded"
+              />
+              <button
+                onClick={sendMsg}
+                disabled={!draft.trim()}
+                className="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white"
+              >
+                send
+              </button>
+            </div>
+          </aside>
+        )}
       </div>
       {runOutput && (
         <div
@@ -244,13 +355,21 @@ export default function Room() {
                   {runOutput.runBy} · exit {runOutput.exitCode ?? '—'} · {runOutput.durationMs}ms
                 </span>
                 {runOutput.timedOut && (
-                  <span className="text-red-400">[timed out at 5s]</span>
+                  <span className="text-red-400">[timed out]</span>
                 )}
                 {runOutput.oomKilled && <span className="text-red-400">[oom killed]</span>}
               </>
             )}
             {runOutput.status === 'error' && (
               <span className="text-red-400">error: {runOutput.error}</span>
+            )}
+            {(runOutput.stdout || runOutput.stderr) && (
+              <button
+                onClick={copyOutput}
+                className="ml-auto text-xs px-2 py-0.5 rounded border border-gray-800 hover:bg-gray-900 text-gray-300"
+              >
+                {outputCopied ? 'copied!' : 'copy'}
+              </button>
             )}
           </div>
           {runOutput.stdout && (
