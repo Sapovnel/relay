@@ -1,0 +1,21 @@
+{
+  "name": "codee",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Real-time collaborative code editor",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:server": "npm --workspace apps/server run dev",
+    "dev:executor": "npm --workspace apps/executor run dev",
+    "mongo:up": "docker compose up -d mongo",
+    "mongo:down": "docker compose down",
+    "mongo:logs": "docker compose logs -f mongo"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
