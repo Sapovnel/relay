@@ -2,6 +2,10 @@ import express, { type Response, type Request } from 'express';
 import { ObjectId, type WithId } from 'mongodb';
 import { requireAuth, type SessionUser } from './auth.js';
 import { rooms, type RoomDoc } from './mongo.js';
+import { env } from './env.js';
+// @ts-expect-error — y-websocket ships JS with no bundled types for this path
+import { docs } from 'y-websocket/bin/utils';
+import type * as Y from 'yjs';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -92,6 +96,64 @@ router.post('/:id/join', async (req, res: Response) => {
     return;
   }
   res.json(toDTO(result));
+});
+
+router.post('/:id/run', async (req, res: Response) => {
+  const user = (req as unknown as AuthedReq).user;
+  const { id } = req.params;
+  if (!id || !ObjectId.isValid(id)) {
+    res.status(400).json({ error: 'bad id' });
+    return;
+  }
+  const room = await rooms().findOne({ _id: new ObjectId(id) });
+  if (!room) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  const allowed = room.ownerId === user.sub || room.memberIds.includes(user.sub);
+  if (!allowed) {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+
+  const ydoc = (docs as Map<string, Y.Doc>).get(id);
+  if (!ydoc) {
+    res.status(400).json({ error: 'no active session for this room (open the room in a browser first)' });
+    return;
+  }
+  const code = ydoc.getText('monaco').toString();
+  const runMap = ydoc.getMap('run');
+
+  runMap.set('latest', {
+    status: 'running',
+    runBy: user.login,
+    startedAt: Date.now(),
+  });
+
+  try {
+    const upstream = await fetch(`${env.EXECUTOR_URL}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: room.language, code }),
+    });
+    const result = (await upstream.json()) as Record<string, unknown>;
+    runMap.set('latest', {
+      status: 'done',
+      runBy: user.login,
+      finishedAt: Date.now(),
+      ...result,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('executor request failed:', err);
+    runMap.set('latest', {
+      status: 'error',
+      runBy: user.login,
+      error: 'executor unreachable',
+      finishedAt: Date.now(),
+    });
+    res.status(502).json({ error: 'executor unreachable' });
+  }
 });
 
 export { router as roomsRouter };

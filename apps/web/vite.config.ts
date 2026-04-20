@@ -8,6 +8,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/auth': 'http://localhost:4000',
+      '/rooms': 'http://localhost:4000',
       '/ws': {
         target: 'ws://localhost:4000',
         ws: true,

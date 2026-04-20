@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 
 interface Room {
@@ -26,6 +26,7 @@ export default function Home() {
   const [language, setLanguage] = useState('javascript');
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/auth/config')
@@ -38,12 +39,14 @@ export default function Home() {
     if (!user) return;
     fetch('/rooms', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : { rooms: [] }))
-      .then((d: { rooms: Room[] }) => setRooms(d.rooms));
+      .then((d: { rooms: Room[] }) => setRooms(d.rooms))
+      .catch((e) => console.error('fetch rooms failed:', e));
   }, [user]);
 
-  const create = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleCreate = async () => {
+    console.log('[Home] handleCreate called', { name, language, creating });
     if (!name.trim() || creating) return;
+    setError(null);
     setCreating(true);
     try {
       const res = await fetch('/rooms', {
@@ -52,10 +55,18 @@ export default function Home() {
         credentials: 'include',
         body: JSON.stringify({ name, language }),
       });
-      if (!res.ok) return;
+      console.log('[Home] POST /rooms status', res.status);
+      if (!res.ok) {
+        const body = await res.text();
+        setError(`server said ${res.status}: ${body.slice(0, 200)}`);
+        return;
+      }
       const newRoom: Room = await res.json();
       setRooms((prev) => [newRoom, ...prev]);
       setName('');
+    } catch (e) {
+      console.error('[Home] create failed:', e);
+      setError(e instanceof Error ? e.message : 'network error');
     } finally {
       setCreating(false);
     }
@@ -114,10 +125,13 @@ export default function Home() {
         <div className="max-w-3xl">
           <section className="mb-10">
             <h2 className="text-lg font-semibold mb-3">New room</h2>
-            <form onSubmit={create} className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleCreate();
+                }}
                 placeholder="Room name"
                 className="px-3 py-2 bg-gray-900 border border-gray-800 rounded text-sm flex-1 min-w-50"
                 maxLength={100}
@@ -134,13 +148,17 @@ export default function Home() {
                 ))}
               </select>
               <button
-                type="submit"
+                type="button"
+                onClick={handleCreate}
                 disabled={!name.trim() || creating}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded text-sm font-medium"
               >
                 {creating ? 'Creating…' : 'Create'}
               </button>
-            </form>
+            </div>
+            {error && (
+              <p className="text-xs text-red-400 mt-2 font-mono">{error}</p>
+            )}
           </section>
 
           <section>

@@ -17,6 +17,10 @@ async function main() {
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
+  app.use((req, _res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    next();
+  });
   app.use('/auth', authRouter);
   app.use('/rooms', roomsRouter);
   app.get('/health', (_req, res) => {

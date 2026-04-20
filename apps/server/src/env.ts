@@ -9,6 +9,7 @@ export const env = {
   GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET ?? '',
   WEB_ORIGIN: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
   DEV_LOGIN: (process.env.DEV_LOGIN ?? 'true').toLowerCase() === 'true',
+  EXECUTOR_URL: process.env.EXECUTOR_URL ?? 'http://localhost:4100',
 };
 
 export const GITHUB_CALLBACK = `${env.WEB_ORIGIN}/auth/github/callback`;
