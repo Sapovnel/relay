@@ -11,3 +11,7 @@ build/
 .claude/
 coverage/
 .turbo/
+test-results/
+playwright-report/
+/blob-report/
+/playwright/.cache/
