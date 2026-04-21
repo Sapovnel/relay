@@ -134,7 +134,9 @@ if (GITHUB_ENABLED) {
           avatarUrl: result.avatarUrl,
         }),
       );
-      res.redirect(env.WEB_ORIGIN);
+      // Relative redirect so OAuth/dev-login work from any host (LAN IP, ngrok,
+    // etc.) without having to bake the origin into env vars.
+    res.redirect('/');
     } catch (err) {
       console.error('oauth callback failed:', err);
       res.status(500).send('oauth: server error');
@@ -172,7 +174,9 @@ if (env.DEV_LOGIN) {
         avatarUrl: result.avatarUrl,
       }),
     );
-    res.redirect(env.WEB_ORIGIN);
+    // Relative redirect so OAuth/dev-login work from any host (LAN IP, ngrok,
+    // etc.) without having to bake the origin into env vars.
+    res.redirect('/');
   });
 }
 

@@ -105,6 +105,19 @@ npm run dev:web        # :5173
 
 Open http://localhost:5173 → **Dev login** → create a room → type code → **Run ▶**.
 
+### Sharing the dev stack on your LAN
+
+Vite binds to `0.0.0.0` by default in this repo, so other devices on the same Wi-Fi can hit your machine. On boot Vite prints something like:
+
+```
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://192.168.1.40:5173/
+```
+
+Open the **Network** URL on your phone / second laptop. Caveats:
+- Windows Firewall will prompt the first time Node binds outside localhost — allow it for *Private networks*.
+- GitHub OAuth doesn't work cross-host (the callback URL is registered against `localhost:5173`). Use **Dev login** instead, or register a second OAuth app pointing at your LAN IP.
+
 ### GitHub OAuth (optional)
 
 1. Register an app at https://github.com/settings/applications/new
