@@ -16,7 +16,12 @@
     "mongo:logs": "docker compose logs -f mongo",
     "infra:up": "docker compose up -d mongo redis",
     "infra:down": "docker compose down",
-    "infra:logs": "docker compose logs -f"
+    "infra:logs": "docker compose logs -f",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
   },
   "engines": {
     "node": ">=20"
