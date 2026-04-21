@@ -7,6 +7,7 @@ import { WebsocketProvider } from 'y-websocket';
 import { MonacoBinding } from 'y-monaco';
 import { useAuth } from '../auth/AuthProvider';
 import { CommandPalette, type Command } from '../components/CommandPalette';
+import { ShortcutsHelp } from '../components/ShortcutsHelp';
 
 const WS_URL = ((): string => {
   const fromEnv = import.meta.env.VITE_WS_URL as string | undefined;
@@ -115,6 +116,11 @@ export default function Room() {
   const [stdin, setStdin] = useState('');
   const [expectedOpen, setExpectedOpen] = useState(false);
   const [expected, setExpected] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [lastReadCount, setLastReadCount] = useState<number>(() => {
+    const stored = localStorage.getItem(`codee-lastread-${roomId}`);
+    return stored ? parseInt(stored, 10) : 0;
+  });
   const [files, setFiles] = useState<string[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
 
@@ -331,17 +337,44 @@ export default function Room() {
     };
   }, [ed, monacoNs, activeFile]);
 
-  // Global Ctrl+Shift+P for the palette.
+  // Global keyboard shortcuts: Ctrl+Shift+P (palette), ? (help), Esc (exit follow).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+        return;
+      }
+      // `?` only when we're not typing into an input/textarea/Monaco.
+      const target = e.target as HTMLElement | null;
+      const isEditing =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable ||
+          target.closest('.monaco-editor'));
+      if (e.key === '?' && !isEditing) {
+        e.preventDefault();
+        setHelpOpen(true);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setFollowingId(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Mark chat as read when the panel is open.
+  useEffect(() => {
+    if (chatOpen) {
+      setLastReadCount(messages.length);
+      localStorage.setItem(`codee-lastread-${roomId}`, String(messages.length));
+    }
+  }, [chatOpen, messages.length, roomId]);
+
+  const unreadChat = chatOpen ? 0 : Math.max(0, messages.length - lastReadCount);
 
   const activeLanguage =
     (activeFile && fileMetaRef.current?.get(activeFile)?.language) ??
@@ -512,6 +545,20 @@ export default function Room() {
       return [
         { id: 'run', label: 'Run code', hint: 'Ctrl+Enter', disabled: !canRun, run: handleRun },
         { id: 'new-file', label: 'New file…', run: createFile },
+        {
+          id: 'fork',
+          label: 'Fork this room',
+          run: async () => {
+            const res = await fetch(`/rooms/${roomId}/fork`, {
+              method: 'POST',
+              credentials: 'include',
+            });
+            if (!res.ok) return;
+            const room: { id: string } = await res.json();
+            window.location.href = `/room/${room.id}`;
+          },
+        },
+        { id: 'help', label: 'Keyboard shortcuts', hint: '?', run: () => setHelpOpen(true) },
         { id: 'chat', label: chatOpen ? 'Hide chat' : 'Open chat', run: () => setChatOpen((v) => !v) },
         {
           id: 'stdin',
@@ -626,9 +673,17 @@ export default function Room() {
         </button>
         <button
           onClick={() => setChatOpen((v) => !v)}
-          className="btn-secondary"
+          className="btn-secondary relative"
         >
-          {chatOpen ? 'Hide chat' : `Chat${messages.length ? ` (${messages.length})` : ''}`}
+          {chatOpen ? 'Hide chat' : 'Chat'}
+          {!chatOpen && unreadChat > 0 && (
+            <span
+              className="absolute -top-1 -right-1 inline-flex h-4 min-w-4 px-1 items-center justify-center rounded-full text-[10px] font-bold text-white"
+              style={{ backgroundColor: 'var(--accent)' }}
+            >
+              {unreadChat > 9 ? '9+' : unreadChat}
+            </span>
+          )}
         </button>
         <div className="flex items-center gap-1">
           {peers.slice(0, 5).map((p, i) => {
@@ -996,6 +1051,7 @@ export default function Room() {
         commands={commands}
         placeholder="Type a command, or a language…"
       />
+      <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

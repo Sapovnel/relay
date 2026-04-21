@@ -85,6 +85,23 @@ export default function Home() {
     setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500);
   };
 
+  const handleRename = async (room: Room) => {
+    const next = prompt('Rename room', room.name);
+    if (!next || next.trim() === room.name) return;
+    const res = await fetch(`/rooms/${room.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ name: next.trim() }),
+    });
+    if (res.ok) {
+      const updated: Room = await res.json();
+      setRooms((prev) => prev.map((r) => (r.id === room.id ? updated : r)));
+    } else {
+      setError(`rename failed: ${res.status}`);
+    }
+  };
+
   const handleDelete = async (room: Room) => {
     if (!confirm(`Delete room "${room.name}"? This cannot be undone.`)) return;
     setDeleting(room.id);
@@ -251,14 +268,23 @@ export default function Home() {
                           {copied === r.id ? 'copied!' : 'copy link'}
                         </button>
                         {user && r.ownerId === user.sub && (
-                          <button
-                            onClick={() => handleDelete(r)}
-                            disabled={deleting === r.id}
-                            className="btn-danger"
-                            title="Delete room"
-                          >
-                            {deleting === r.id ? '…' : 'delete'}
-                          </button>
+                          <>
+                            <button
+                              onClick={() => handleRename(r)}
+                              className="btn-secondary"
+                              title="Rename room"
+                            >
+                              rename
+                            </button>
+                            <button
+                              onClick={() => handleDelete(r)}
+                              disabled={deleting === r.id}
+                              className="btn-danger"
+                              title="Delete room"
+                            >
+                              {deleting === r.id ? '…' : 'delete'}
+                            </button>
+                          </>
                         )}
                       </div>
                       <Link to={`/room/${r.id}`} className="btn-primary !py-1.5 !px-3 !text-sm">

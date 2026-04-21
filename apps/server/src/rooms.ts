@@ -5,7 +5,7 @@ import { rooms, snapshots, type RoomDoc } from './mongo.js';
 import { env } from './env.js';
 // @ts-expect-error — y-websocket ships JS with no bundled types for this path
 import { docs } from 'y-websocket/bin/utils';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -157,6 +157,67 @@ router.delete('/:id', async (req, res: Response) => {
     .deleteOne({ roomId: id })
     .catch(() => {});
   res.json({ ok: true });
+});
+
+router.post('/:id/fork', async (req, res: Response) => {
+  const user = (req as unknown as AuthedReq).user;
+  const { id } = req.params;
+  if (!id || !ObjectId.isValid(id)) {
+    res.status(400).json({ error: 'bad id' });
+    return;
+  }
+  const source = await rooms().findOne({ _id: new ObjectId(id) });
+  if (!source) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  const allowed = source.ownerId === user.sub || source.memberIds.includes(user.sub);
+  if (!allowed) {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+
+  // Prefer the live in-memory doc (freshest); fall back to last snapshot on disk.
+  const liveDoc = (docs as Map<string, Y.Doc>).get(id);
+  let stateBytes: Buffer;
+  if (liveDoc) {
+    stateBytes = Buffer.from(Y.encodeStateAsUpdate(liveDoc));
+  } else {
+    const snap = await snapshots().findOne({ roomId: id });
+    if (!snap?.state) {
+      res.status(400).json({ error: 'source room has no persisted state yet' });
+      return;
+    }
+    const raw = snap.state as { buffer?: unknown } | Uint8Array;
+    if (raw instanceof Uint8Array) {
+      stateBytes = Buffer.from(raw);
+    } else if (raw.buffer instanceof Uint8Array) {
+      stateBytes = Buffer.from(raw.buffer);
+    } else {
+      res.status(500).json({ error: 'cannot read source state' });
+      return;
+    }
+  }
+
+  const now = new Date();
+  const inserted = await rooms().insertOne({
+    ownerId: user.sub,
+    name: `${source.name} (fork)`.slice(0, 100),
+    language: source.language,
+    createdAt: now,
+    memberIds: [user.sub],
+  });
+  await snapshots().insertOne({
+    roomId: inserted.insertedId.toHexString(),
+    state: stateBytes,
+    updatedAt: now,
+  });
+  const newDoc = await rooms().findOne({ _id: inserted.insertedId });
+  if (!newDoc) {
+    res.status(500).json({ error: 'fork failed' });
+    return;
+  }
+  res.json(toDTO(newDoc));
 });
 
 router.post('/:id/run', async (req, res: Response) => {
