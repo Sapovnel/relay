@@ -16,6 +16,7 @@ A browser-based code editor where multiple users edit **and run** code together 
 - **Docker-per-run sandbox** — fresh container per call, `NetworkDisabled`, `CapDrop: ALL`, `ReadonlyRootfs`, `no-new-privileges`, non-root user, memory + CPU + PID caps, tmpfs `/tmp`, 5-second `SIGKILL`, containers force-removed in `finally`
 - **Streaming output** — NDJSON from executor, progressively mirrored into a Y.Map so every peer sees output as the container produces it
 - **Stdin input** — pipe text to the running program (via a second hijacked attach call to force EOF correctly)
+- **Pre-installed packages** — curated runner images bake a small library set so user code can `require('lodash')` / `import numpy` without per-run network access. JS: lodash, date-fns, uuid, ramda, zod, big.js, nanoid. Python: numpy, sympy, regex, more-itertools, pyyaml. Build with `npm run runners:build`. Falls back to vanilla node:alpine / python:alpine if the custom images aren't built yet.
 - **Built-in `check` / `checkEq` assertions** — runner prepends language-specific helpers; the client parses `PASS:` / `FAIL:` lines into a test panel
 - **Expected-output diff** — set an expected string; ✓/✗ banner shows after each run
 
@@ -92,6 +93,9 @@ npm run infra:up
 # Pre-pull runner images (one-time)
 docker pull node:20-alpine
 docker pull python:3.12-alpine
+
+# Build custom runner images with pre-installed packages (optional, ~2 min)
+npm run runners:build
 
 # Three terminals:
 npm run dev:server     # :4000

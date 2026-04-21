@@ -18,7 +18,8 @@
     "infra:down": "docker compose down",
     "infra:logs": "docker compose logs -f",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "runners:build": "docker build -t codee-runner-node:latest apps/executor/runners/node && docker build -t codee-runner-python:latest apps/executor/runners/python"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0"

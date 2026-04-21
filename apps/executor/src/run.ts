@@ -34,14 +34,20 @@ interface LangConfig {
 // going through argv are byte-safe. For languages that can't accept code on argv (Go
 // needs a real .go file), we use `sh -c 'cat > file && run file'` and pipe the code
 // through stdin.
+//
+// Image names: when the user has built our custom runner images via
+// `npm run runners:build`, those carry a curated set of pre-installed packages
+// so `require('lodash')` / `import numpy` work inside the no-network sandbox.
+// We fall back to vanilla node/python images at runtime if the custom ones
+// haven't been built yet.
 const LANGS: Record<string, LangConfig> = {
   javascript: {
-    image: 'node:20-alpine',
+    image: 'codee-runner-node:latest',
     makeCmd: (code) => ['node', '-e', code],
     viaStdin: false,
   },
   python: {
-    image: 'python:3.12-alpine',
+    image: 'codee-runner-python:latest',
     makeCmd: (code) => ['python3', '-c', code],
     viaStdin: false,
   },
@@ -122,9 +128,26 @@ export async function run(
   const started = Date.now();
   const extraEnv = cfg.makeEnv?.(effectiveCode) ?? [];
   const needsStdin = cfg.viaStdin || stdin.length > 0;
+
+  // If the curated runner image isn't present, fall back to a vanilla one.
+  // (User just hasn't run `npm run runners:build` yet.)
+  let image = cfg.image;
+  try {
+    await docker.getImage(image).inspect();
+  } catch {
+    const fallback = language === 'python' ? 'python:3.12-alpine' : 'node:20-alpine';
+    if (image !== fallback) {
+      console.warn(
+        `[runner] image "${image}" not found locally — falling back to "${fallback}". ` +
+          `Run "npm run runners:build" to enable pre-installed packages.`,
+      );
+      image = fallback;
+    }
+  }
+
   const container = await docker.createContainer({
     name: `codee-run-${randomUUID().slice(0, 8)}`,
-    Image: cfg.image,
+    Image: image,
     Cmd: cfg.makeCmd(effectiveCode),
     User: 'nobody',
     WorkingDir: '/tmp',
@@ -203,7 +226,7 @@ export async function run(
       stdout: true,
       stderr: true,
       follow: true,
-      tail: 'all',
+      tail: 0,
     })) as unknown as NodeJS.ReadableStream;
     docker.modem.demuxStream(logsStream, stdoutStream, stderrStream);
 
