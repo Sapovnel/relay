@@ -1,11 +1,12 @@
 import { useParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type * as Monaco from 'monaco-editor';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { MonacoBinding } from 'y-monaco';
 import { useAuth } from '../auth/AuthProvider';
+import { CommandPalette, type Command } from '../components/CommandPalette';
 
 const WS_URL = ((): string => {
   const fromEnv = import.meta.env.VITE_WS_URL as string | undefined;
@@ -86,6 +87,7 @@ export default function Room() {
     { clientId: number; name: string; color: string; isMe: boolean }[]
   >([]);
   const [followingId, setFollowingId] = useState<number | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
@@ -217,7 +219,22 @@ export default function Room() {
     followingIdRef.current = followingId;
   }, [followingId]);
 
+  // Global Ctrl/Cmd+Shift+P to open the palette, even when Monaco is focused
+  // we register the same shortcut in addCommand below so Monaco doesn't swallow it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const runnable = RUNNABLE.has(language);
+  const canRun =
+    status === 'connected' && !triggering && runOutput?.status !== 'running' && runnable;
 
   const handleRun = async () => {
     if (triggering || !runnable) return;
@@ -287,13 +304,64 @@ export default function Room() {
     setTimeout(() => setOutputCopied(false), 1500);
   };
 
+  const commands: Command[] = useMemo(
+    () => {
+      const langCmds: Command[] = LANGUAGES.map((l) => ({
+        id: `lang-${l}`,
+        label: `Switch language: ${l}`,
+        hint: RUNNABLE.has(l) ? 'runnable' : '',
+        run: () => handleLanguageChange(l),
+      }));
+      return [
+        {
+          id: 'run',
+          label: 'Run code',
+          hint: 'Ctrl+Enter',
+          disabled: !canRun,
+          run: handleRun,
+        },
+        {
+          id: 'chat',
+          label: chatOpen ? 'Hide chat' : 'Open chat',
+          run: () => setChatOpen((v) => !v),
+        },
+        {
+          id: 'stdin',
+          label: stdinOpen ? 'Hide stdin input' : 'Show stdin input',
+          run: () => setStdinOpen((v) => !v),
+        },
+        {
+          id: 'download',
+          label: 'Download current file',
+          run: handleDownload,
+        },
+        {
+          id: 'copy-link',
+          label: 'Copy shareable link',
+          run: () => {
+            navigator.clipboard.writeText(`${window.location.origin}/join/${roomId}`);
+          },
+        },
+        {
+          id: 'home',
+          label: 'Back to rooms',
+          run: () => {
+            window.location.href = '/';
+          },
+        },
+        ...langCmds,
+      ];
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [canRun, chatOpen, stdinOpen, language, roomId],
+  );
+
   const statusColor =
     status === 'connected'
       ? 'bg-green-500'
       : status === 'connecting'
         ? 'bg-yellow-500'
         : 'bg-red-500';
-  const canRun = status === 'connected' && !triggering && runOutput?.status !== 'running' && runnable;
 
   return (
     <div
@@ -426,6 +494,10 @@ export default function Room() {
                 editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
                   handleRunRef.current();
                 });
+                editor.addCommand(
+                  monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP,
+                  () => setPaletteOpen(true),
+                );
               }}
               options={{
                 fontSize: 14,
@@ -576,6 +648,12 @@ export default function Room() {
           </div>
         </div>
       )}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={commands}
+        placeholder="Type a command, or a language…"
+      />
     </div>
   );
 }
