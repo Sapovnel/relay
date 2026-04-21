@@ -60,6 +60,20 @@ export function supportedLanguages(): string[] {
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 5000;
 
+// Lightweight test helpers injected before user code so assertions produce
+// PASS:/FAIL: lines that the client can parse into a test panel.
+const TEST_PRELUDE: Record<string, string> = {
+  javascript:
+    `function check(c,n,e){console.log(c?'PASS: '+n:'FAIL: '+n+(e?' — '+e:''))};` +
+    `function checkEq(a,b,n){const p=JSON.stringify(a)===JSON.stringify(b);` +
+    `console.log(p?'PASS: '+n:'FAIL: '+n+' — expected '+JSON.stringify(b)+' got '+JSON.stringify(a))};\n`,
+  python:
+    `def check(c,n,e=None):\n` +
+    ` print('PASS: '+n if c else 'FAIL: '+n+(' — '+str(e) if e else ''))\n` +
+    `def check_eq(a,b,n):\n` +
+    ` print('PASS: '+n if a==b else f'FAIL: {n} — expected {b!r} got {a!r}')\n`,
+};
+
 function capture(stream: NodeJS.ReadableStream, cap: number) {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -101,13 +115,14 @@ export async function run(
   // Go compiler's build cache lives in /tmp; needs more space than a script runtime.
   const tmpfsSize = language === 'go' ? '128m' : '16m';
 
+  const effectiveCode = (TEST_PRELUDE[language] ?? '') + code;
   const started = Date.now();
-  const extraEnv = cfg.makeEnv?.(code) ?? [];
+  const extraEnv = cfg.makeEnv?.(effectiveCode) ?? [];
   const needsStdin = cfg.viaStdin || stdin.length > 0;
   const container = await docker.createContainer({
     name: `codee-run-${randomUUID().slice(0, 8)}`,
     Image: cfg.image,
-    Cmd: cfg.makeCmd(code),
+    Cmd: cfg.makeCmd(effectiveCode),
     User: 'nobody',
     WorkingDir: '/tmp',
     Env: [
@@ -172,7 +187,7 @@ export async function run(
     await container.start();
 
     if (stdinStream) {
-      stdinStream.write(cfg.viaStdin ? code : stdin);
+      stdinStream.write(cfg.viaStdin ? effectiveCode : stdin);
       (stdinStream as unknown as { end: () => void }).end();
     }
 

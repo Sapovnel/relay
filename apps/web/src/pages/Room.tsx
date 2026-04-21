@@ -113,6 +113,8 @@ export default function Room() {
   const [outputCopied, setOutputCopied] = useState(false);
   const [stdinOpen, setStdinOpen] = useState(false);
   const [stdin, setStdin] = useState('');
+  const [expectedOpen, setExpectedOpen] = useState(false);
+  const [expected, setExpected] = useState('');
   const [files, setFiles] = useState<string[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
 
@@ -449,6 +451,43 @@ export default function Room() {
     URL.revokeObjectURL(url);
   };
 
+  interface TestResult {
+    name: string;
+    pass: boolean;
+    detail?: string;
+  }
+
+  const testResults: TestResult[] = useMemo(() => {
+    const stdout = runOutput?.stdout;
+    if (!stdout) return [];
+    return stdout
+      .split('\n')
+      .map((line) => {
+        const p = line.match(/^PASS: (.+)$/);
+        if (p) return { name: p[1]!, pass: true };
+        const f = line.match(/^FAIL: (.+?)(?:\s+—\s+(.+))?$/);
+        if (f) return { name: f[1]!, pass: false, detail: f[2] };
+        return null;
+      })
+      .filter((x): x is TestResult => x !== null);
+  }, [runOutput?.stdout]);
+
+  const testSummary = useMemo(() => {
+    if (testResults.length === 0) return null;
+    const passed = testResults.filter((r) => r.pass).length;
+    return { total: testResults.length, passed, failed: testResults.length - passed };
+  }, [testResults]);
+
+  const expectedMatch = useMemo(() => {
+    if (!expected.trim() || runOutput?.status !== 'done') return null;
+    const actual = (runOutput.stdout ?? '')
+      .split('\n')
+      .filter((l) => !/^(PASS|FAIL): /.test(l))
+      .join('\n')
+      .trim();
+    return actual === expected.trim();
+  }, [expected, runOutput]);
+
   const copyOutput = async () => {
     if (!runOutput) return;
     const text = [runOutput.stdout, runOutput.stderr].filter(Boolean).join('\n');
@@ -570,6 +609,13 @@ export default function Room() {
           className="btn-secondary"
         >
           {stdinOpen ? 'Hide stdin' : `Stdin${stdin ? ' •' : ''}`}
+        </button>
+        <button
+          onClick={() => setExpectedOpen((v) => !v)}
+          title="Expected output — compared to stdout on run"
+          className="btn-secondary"
+        >
+          {expectedOpen ? 'Hide expected' : `Expected${expected ? ' •' : ''}`}
         </button>
         <button
           onClick={handleDownload}
@@ -804,6 +850,35 @@ export default function Room() {
           />
         </div>
       )}
+      {expectedOpen && (
+        <div
+          style={{ flexShrink: 0, background: 'var(--bg-surface)' }}
+          className="border-t border-white/[0.06] px-4 py-2"
+        >
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-[color:var(--text-secondary)] font-semibold">
+              expected output
+            </span>
+            <span className="text-[10px] text-[color:var(--text-tertiary)]">
+              compared to stdout after Run (PASS/FAIL lines are excluded)
+            </span>
+            {expectedMatch === true && (
+              <span className="text-[10px] text-green-400 ml-auto">✓ matches</span>
+            )}
+            {expectedMatch === false && (
+              <span className="text-[10px] text-red-400 ml-auto">✗ differs</span>
+            )}
+          </div>
+          <textarea
+            value={expected}
+            onChange={(e) => setExpected(e.target.value)}
+            placeholder={'e.g.\nHello, world!\n42\n'}
+            spellCheck={false}
+            rows={3}
+            className="input-field w-full font-mono text-xs !py-2 resize-none"
+          />
+        </div>
+      )}
       {runOutput && (
         <div
           style={{ height: 240, flexShrink: 0, overflow: 'auto', background: 'var(--bg-surface)' }}
@@ -848,6 +923,56 @@ export default function Room() {
               </button>
             )}
           </div>
+          {testSummary && (
+            <div className="px-4 py-2 border-b border-white/[0.06]">
+              <div className="flex items-center gap-2 mb-1.5 text-xs">
+                <span className="text-[color:var(--text-secondary)] uppercase tracking-wider text-[10px] font-semibold">
+                  tests
+                </span>
+                <span className="text-[color:var(--text-primary)]">
+                  {testSummary.passed}/{testSummary.total} pass
+                </span>
+                {testSummary.failed > 0 && (
+                  <span className="text-red-400">· {testSummary.failed} failed</span>
+                )}
+              </div>
+              <ul className="space-y-0.5">
+                {testResults.map((t, i) => (
+                  <li key={i} className="flex items-baseline gap-2 text-xs">
+                    {t.pass ? (
+                      <span className="text-green-400 font-mono">✓</span>
+                    ) : (
+                      <span className="text-red-400 font-mono">✗</span>
+                    )}
+                    <span className={t.pass ? 'text-[color:var(--text-primary)]' : 'text-red-300'}>
+                      {t.name}
+                    </span>
+                    {t.detail && !t.pass && (
+                      <span className="text-[color:var(--text-tertiary)] font-mono">
+                        — {t.detail}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {expectedMatch === false && runOutput.status === 'done' && (
+            <div className="px-4 py-2 border-b border-white/[0.06] flex items-center gap-2 text-xs">
+              <span className="text-red-400">✗</span>
+              <span className="text-[color:var(--text-secondary)]">
+                stdout doesn&apos;t match expected output
+              </span>
+            </div>
+          )}
+          {expectedMatch === true && runOutput.status === 'done' && (
+            <div className="px-4 py-2 border-b border-white/[0.06] flex items-center gap-2 text-xs">
+              <span className="text-green-400">✓</span>
+              <span className="text-[color:var(--text-secondary)]">
+                stdout matches expected output
+              </span>
+            </div>
+          )}
           <div className="px-4 py-3">
             {runOutput.stdout && (
               <pre className="text-[color:var(--text-primary)] whitespace-pre-wrap leading-relaxed">
