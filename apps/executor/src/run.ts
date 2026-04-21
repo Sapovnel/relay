@@ -95,10 +95,13 @@ function capture(stream: NodeJS.ReadableStream, cap: number) {
   };
 }
 
+export type ChunkCallback = (fd: 1 | 2, chunk: Buffer) => void;
+
 export async function run(
   language: string,
   code: string,
   stdin: string = '',
+  onChunk?: ChunkCallback,
 ): Promise<RunResult> {
   const cfg = LANGS[language];
   if (!cfg) {
@@ -168,11 +171,11 @@ export async function run(
 
   try {
     // Architecture:
-    //   - For stdin delivery, attach with hijack: true so end() actually closes the
-    //     TCP write side (the only way Docker fires StdinOnce and sends EOF).
-    //   - For stdout/stderr capture, DON'T read from that hijacked socket — it was
-    //     flaky. Instead, after container.wait(), pull the full output via
-    //     container.logs() and demux the 8-byte-framed buffer ourselves.
+    //   - Stdin (if needed) via a hijacked attach so end() actually closes TCP
+    //     write side (needed for StdinOnce → EOF inside the container).
+    //   - Stdout/stderr via container.logs(follow: true) started BEFORE start,
+    //     demuxed with Docker's frame protocol. Each demuxed chunk fires
+    //     onChunk() so /run can stream it to the caller in real time.
     let stdinStream: NodeJS.ReadWriteStream | null = null;
     if (needsStdin) {
       stdinStream = (await container.attach({
@@ -184,7 +187,25 @@ export async function run(
       })) as NodeJS.ReadWriteStream;
     }
 
+    if (onChunk) {
+      stdoutStream.on('data', (c: Buffer) => onChunk(1, c));
+      stderrStream.on('data', (c: Buffer) => onChunk(2, c));
+    }
+
     await container.start();
+
+    // After start: follow the container's log stream. Before-start logs()
+    // returns an empty stream on some Docker versions (notably Docker Desktop
+    // on Windows), so we start the subscription here. For very fast programs
+    // the first few ms of output can race the subscription — we backfill
+    // with a final non-follow logs() pull just before cleanup.
+    const logsStream = (await container.logs({
+      stdout: true,
+      stderr: true,
+      follow: true,
+      tail: 'all',
+    })) as unknown as NodeJS.ReadableStream;
+    docker.modem.demuxStream(logsStream, stdoutStream, stderrStream);
 
     if (stdinStream) {
       stdinStream.write(cfg.viaStdin ? effectiveCode : stdin);
@@ -194,25 +215,17 @@ export async function run(
     const waitResult = await container.wait();
     clearTimeout(killTimer);
 
-    const logsBuffer = (await container.logs({
-      stdout: true,
-      stderr: true,
-      follow: false,
-      tail: 10000,
-    })) as unknown as Buffer;
-
-    // Docker log stream framing when Tty: false — repeating frames of
-    // [ fd:1 byte | 3 zero bytes | length:uint32BE ] + payload. fd 1 = stdout, 2 = stderr.
-    let offset = 0;
-    while (offset + 8 <= logsBuffer.length) {
-      const fd = logsBuffer[offset];
-      const size = logsBuffer.readUInt32BE(offset + 4);
-      if (offset + 8 + size > logsBuffer.length) break;
-      const payload = logsBuffer.subarray(offset + 8, offset + 8 + size);
-      if (fd === 2) stderrStream.write(payload);
-      else stdoutStream.write(payload);
-      offset += 8 + size;
-    }
+    // Drain the logs stream — when the container exits, follow=true will end it.
+    await new Promise((resolve) => {
+      if ((logsStream as NodeJS.ReadableStream & { readableEnded?: boolean }).readableEnded) {
+        resolve(undefined);
+        return;
+      }
+      logsStream.once('end', () => resolve(undefined));
+      logsStream.once('close', () => resolve(undefined));
+      // Safety cap — don't hang forever on a stuck log stream.
+      setTimeout(() => resolve(undefined), 500);
+    });
     stdoutStream.end();
     stderrStream.end();
 

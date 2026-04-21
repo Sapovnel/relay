@@ -10,6 +10,13 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, languages: supportedLanguages() });
 });
 
+// Streaming NDJSON. Each line is one event:
+//   {"type":"stdout","data":"..."}
+//   {"type":"stderr","data":"..."}
+//   {"type":"done","exitCode":0,"timedOut":false,"oomKilled":false,"durationMs":...,
+//    "stdout":"<full>","stderr":"<full>"}
+// The final 'done' event also carries the full concatenated output so callers
+// that don't want to reassemble chunks themselves can just use it.
 app.post('/run', async (req, res) => {
   const { language, code, stdin } = req.body as {
     language?: unknown;
@@ -29,20 +36,27 @@ app.post('/run', async (req, res) => {
     res.status(413).json({ error: 'stdin exceeds 64 KB' });
     return;
   }
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering if ever proxied
+  const write = (event: unknown) => res.write(JSON.stringify(event) + '\n');
+
   try {
-    const result = await run(language, code, stdinStr);
-    res.json(result);
+    const result = await run(language, code, stdinStr, (fd, chunk) => {
+      write({
+        type: fd === 1 ? 'stdout' : 'stderr',
+        data: chunk.toString('utf8'),
+      });
+    });
+    write({ type: 'done', ...result });
   } catch (err) {
-    console.error('run error:', err);
-    res.status(500).json({
-      stdout: '',
-      stderr: err instanceof Error ? err.message : 'executor error',
-      exitCode: null,
-      timedOut: false,
-      oomKilled: false,
-      durationMs: 0,
+    write({
+      type: 'error',
+      message: err instanceof Error ? err.message : 'executor error',
     });
   }
+  res.end();
 });
 
 app.listen(PORT, () => {

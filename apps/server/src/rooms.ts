@@ -300,24 +300,93 @@ router.post('/:id/run', async (req, res: Response) => {
   });
 
   const runTimer = runDuration.startTimer({ language: runLanguage });
+  const startedAt = Date.now();
   try {
     const upstream = await fetch(`${env.EXECUTOR_URL}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ language: runLanguage, code, stdin: stdinStr }),
     });
-    const result = (await upstream.json()) as Record<string, unknown> & {
+    if (!upstream.body) {
+      throw new Error('executor returned empty body');
+    }
+
+    // Consume the NDJSON stream. Each stdout/stderr chunk bumps the Y.Map so
+    // every peer observing the doc sees output grow in real time.
+    interface DoneEvent {
       exitCode?: number | null;
       timedOut?: boolean;
       oomKilled?: boolean;
+      stdout?: string;
+      stderr?: string;
+      durationMs?: number;
+    }
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let stdoutAcc = '';
+    let stderrAcc = '';
+    let finalEvent: DoneEvent | null = null;
+
+    const flushRunning = () => {
+      runMap.set('latest', {
+        status: 'running',
+        runBy: user.login,
+        startedAt,
+        stdout: stdoutAcc,
+        stderr: stderrAcc,
+      });
     };
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line) continue;
+        let ev: { type: string; data?: string } & Record<string, unknown>;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (ev.type === 'stdout' && typeof ev.data === 'string') {
+          stdoutAcc += ev.data;
+          flushRunning();
+        } else if (ev.type === 'stderr' && typeof ev.data === 'string') {
+          stderrAcc += ev.data;
+          flushRunning();
+        } else if (ev.type === 'done') {
+          const { type: _t, data: _d, ...rest } = ev;
+          void _t;
+          void _d;
+          finalEvent = rest as DoneEvent;
+        }
+      }
+    }
+
     runTimer();
+    if (!finalEvent) {
+      runsTotal.inc({ language: runLanguage, outcome: 'executor_error' });
+      runMap.set('latest', {
+        status: 'error',
+        runBy: user.login,
+        error: 'executor stream ended without done event',
+        finishedAt: Date.now(),
+      });
+      res.status(502).json({ error: 'executor streamed no result' });
+      return;
+    }
+    const done: DoneEvent = finalEvent;
     const outcome =
-      result.timedOut === true
+      done.timedOut === true
         ? 'timeout'
-        : result.oomKilled === true
+        : done.oomKilled === true
           ? 'oom'
-          : result.exitCode === 0
+          : done.exitCode === 0
             ? 'success'
             : 'failure';
     runsTotal.inc({ language: runLanguage, outcome });
@@ -325,16 +394,20 @@ router.post('/:id/run', async (req, res: Response) => {
       status: 'done',
       runBy: user.login,
       finishedAt: Date.now(),
-      ...result,
+      // Prefer server-accumulated streamed output — it's the same bytes
+      // but was already mirrored into the doc for every peer.
+      ...done,
+      stdout: done.stdout ?? stdoutAcc,
+      stderr: done.stderr ?? stderrAcc,
     });
-    res.json(result);
+    res.json(done);
   } catch (err) {
     runTimer();
     runsTotal.inc({ language: runLanguage, outcome: 'executor_error' });
     runMap.set('latest', {
       status: 'error',
       runBy: user.login,
-      error: 'executor unreachable',
+      error: err instanceof Error ? err.message : 'executor unreachable',
       finishedAt: Date.now(),
     });
     res.status(502).json({ error: 'executor unreachable' });
