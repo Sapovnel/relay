@@ -81,7 +81,11 @@ function capture(stream: NodeJS.ReadableStream, cap: number) {
   };
 }
 
-export async function run(language: string, code: string): Promise<RunResult> {
+export async function run(
+  language: string,
+  code: string,
+  stdin: string = '',
+): Promise<RunResult> {
   const cfg = LANGS[language];
   if (!cfg) {
     return {
@@ -99,6 +103,7 @@ export async function run(language: string, code: string): Promise<RunResult> {
 
   const started = Date.now();
   const extraEnv = cfg.makeEnv?.(code) ?? [];
+  const needsStdin = cfg.viaStdin || stdin.length > 0;
   const container = await docker.createContainer({
     name: `codee-run-${randomUUID().slice(0, 8)}`,
     Image: cfg.image,
@@ -113,11 +118,11 @@ export async function run(language: string, code: string): Promise<RunResult> {
       ...extraEnv,
     ],
     NetworkDisabled: true,
-    AttachStdin: cfg.viaStdin,
+    AttachStdin: needsStdin,
     AttachStdout: true,
     AttachStderr: true,
-    OpenStdin: cfg.viaStdin,
-    StdinOnce: cfg.viaStdin,
+    OpenStdin: needsStdin,
+    StdinOnce: needsStdin,
     Tty: false,
     StopTimeout: 0,
     HostConfig: {
@@ -147,28 +152,51 @@ export async function run(language: string, code: string): Promise<RunResult> {
   const getStderr = capture(stderrStream, MAX_OUTPUT_BYTES);
 
   try {
-    const attachStream = (await container.attach({
-      stream: true,
-      stdin: cfg.viaStdin,
-      stdout: true,
-      stderr: true,
-    })) as NodeJS.ReadWriteStream;
+    // Architecture:
+    //   - For stdin delivery, attach with hijack: true so end() actually closes the
+    //     TCP write side (the only way Docker fires StdinOnce and sends EOF).
+    //   - For stdout/stderr capture, DON'T read from that hijacked socket — it was
+    //     flaky. Instead, after container.wait(), pull the full output via
+    //     container.logs() and demux the 8-byte-framed buffer ourselves.
+    let stdinStream: NodeJS.ReadWriteStream | null = null;
+    if (needsStdin) {
+      stdinStream = (await container.attach({
+        stream: true,
+        stdin: true,
+        stdout: false,
+        stderr: false,
+        hijack: true,
+      })) as NodeJS.ReadWriteStream;
+    }
 
-    docker.modem.demuxStream(attachStream, stdoutStream, stderrStream);
     await container.start();
 
-    if (cfg.viaStdin) {
-      attachStream.write(code);
-      (attachStream as unknown as { end?: () => void }).end?.();
+    if (stdinStream) {
+      stdinStream.write(cfg.viaStdin ? code : stdin);
+      (stdinStream as unknown as { end: () => void }).end();
     }
 
     const waitResult = await container.wait();
     clearTimeout(killTimer);
-    await new Promise((r) => setImmediate(r));
-    try {
-      (attachStream as unknown as { destroy?: () => void }).destroy?.();
-    } catch {
-      // docker-modem's HttpDuplex.destroy can throw after stream.end() nulls its request.
+
+    const logsBuffer = (await container.logs({
+      stdout: true,
+      stderr: true,
+      follow: false,
+      tail: 10000,
+    })) as unknown as Buffer;
+
+    // Docker log stream framing when Tty: false — repeating frames of
+    // [ fd:1 byte | 3 zero bytes | length:uint32BE ] + payload. fd 1 = stdout, 2 = stderr.
+    let offset = 0;
+    while (offset + 8 <= logsBuffer.length) {
+      const fd = logsBuffer[offset];
+      const size = logsBuffer.readUInt32BE(offset + 4);
+      if (offset + 8 + size > logsBuffer.length) break;
+      const payload = logsBuffer.subarray(offset + 8, offset + 8 + size);
+      if (fd === 2) stderrStream.write(payload);
+      else stdoutStream.write(payload);
+      offset += 8 + size;
     }
     stdoutStream.end();
     stderrStream.end();

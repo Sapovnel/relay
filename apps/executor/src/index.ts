@@ -11,7 +11,11 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/run', async (req, res) => {
-  const { language, code } = req.body as { language?: unknown; code?: unknown };
+  const { language, code, stdin } = req.body as {
+    language?: unknown;
+    code?: unknown;
+    stdin?: unknown;
+  };
   if (typeof language !== 'string' || typeof code !== 'string') {
     res.status(400).json({ error: 'language and code (strings) required' });
     return;
@@ -20,8 +24,13 @@ app.post('/run', async (req, res) => {
     res.status(413).json({ error: 'code exceeds 64 KB' });
     return;
   }
+  const stdinStr = typeof stdin === 'string' ? stdin : '';
+  if (stdinStr.length > 64 * 1024) {
+    res.status(413).json({ error: 'stdin exceeds 64 KB' });
+    return;
+  }
   try {
-    const result = await run(language, code);
+    const result = await run(language, code, stdinStr);
     res.json(result);
   } catch (err) {
     console.error('run error:', err);

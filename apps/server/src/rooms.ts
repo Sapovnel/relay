@@ -187,6 +187,8 @@ router.post('/:id/run', async (req, res: Response) => {
     return;
   }
   const code = ydoc.getText('monaco').toString();
+  const stdin = (req.body as { stdin?: unknown } | undefined)?.stdin;
+  const stdinStr = typeof stdin === 'string' ? stdin : '';
   const runMap = ydoc.getMap('run');
 
   runMap.set('latest', {
@@ -199,7 +201,7 @@ router.post('/:id/run', async (req, res: Response) => {
     const upstream = await fetch(`${env.EXECUTOR_URL}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ language: room.language, code }),
+      body: JSON.stringify({ language: room.language, code, stdin: stdinStr }),
     });
     const result = (await upstream.json()) as Record<string, unknown>;
     runMap.set('latest', {

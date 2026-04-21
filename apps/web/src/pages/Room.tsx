@@ -82,11 +82,17 @@ export default function Room() {
   const [triggering, setTriggering] = useState(false);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [language, setLanguage] = useState('javascript');
-  const [peerCount, setPeerCount] = useState(1);
+  const [peers, setPeers] = useState<{ name: string; color: string }[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
   const [outputCopied, setOutputCopied] = useState(false);
+  const [stdinOpen, setStdinOpen] = useState(false);
+  const [stdin, setStdin] = useState('');
+  const stdinRef = useRef(stdin);
+  useEffect(() => {
+    stdinRef.current = stdin;
+  }, [stdin]);
   const chatArrRef = useRef<Y.Array<ChatMsg> | null>(null);
   const handleRunRef = useRef<() => void>(() => {});
 
@@ -130,7 +136,14 @@ export default function Room() {
     provider.on('status', onStatus);
 
     const onAwareness = () => {
-      setPeerCount(provider.awareness.getStates().size);
+      const states = Array.from(provider.awareness.getStates().values()) as {
+        user?: { name: string; color: string };
+      }[];
+      setPeers(
+        states
+          .filter((s) => s.user)
+          .map((s) => ({ name: s.user!.name, color: s.user!.color })),
+      );
     };
     provider.awareness.on('change', onAwareness);
     onAwareness();
@@ -167,7 +180,12 @@ export default function Room() {
     if (triggering || !runnable) return;
     setTriggering(true);
     try {
-      await fetch(`/rooms/${roomId}/run`, { method: 'POST', credentials: 'include' });
+      await fetch(`/rooms/${roomId}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ stdin: stdinRef.current }),
+      });
     } finally {
       setTriggering(false);
     }
@@ -242,23 +260,30 @@ export default function Room() {
         display: 'flex',
         flexDirection: 'column',
       }}
-      className="bg-gray-950 text-gray-100"
+      className="text-[color:var(--text-primary)]"
     >
       <header
         style={{ flexShrink: 0 }}
-        className="px-4 py-2 border-b border-gray-800 flex items-center gap-3"
+        className="glass border-b border-white/[0.06] px-4 py-2.5 flex items-center gap-3"
       >
-        <a href="/" className="text-sm text-gray-400 hover:text-gray-200">
+        <a
+          href="/"
+          className="text-sm text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)] transition"
+          title="Back to rooms"
+        >
           ←
         </a>
-        <span className="font-mono text-xs uppercase tracking-wide text-gray-500">room</span>
-        <span className="text-sm font-medium truncate max-w-xs">
+        <span className="wordmark text-sm hidden sm:inline">
+          code<span className="wordmark-accent">E</span>
+        </span>
+        <span className="h-4 w-px bg-white/10 hidden sm:inline-block" />
+        <span className="text-sm font-medium truncate max-w-xs text-[color:var(--text-primary)]">
           {roomInfo?.name ?? roomId}
         </span>
         <select
           value={language}
           onChange={(e) => handleLanguageChange(e.target.value)}
-          className="ml-2 px-2 py-0.5 text-xs bg-gray-900 border border-gray-800 rounded"
+          className="ml-1 input-field !py-1 !px-2 !text-xs"
         >
           {LANGUAGES.map((l) => (
             <option key={l} value={l}>
@@ -270,28 +295,50 @@ export default function Room() {
           onClick={handleRun}
           disabled={!canRun}
           title={runnable ? 'Run (Ctrl+Enter)' : `${language} is not runnable`}
-          className="ml-auto px-3 py-1 text-xs font-medium bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded text-white"
+          className="ml-auto btn-primary !py-1.5 !px-3 !text-xs"
         >
           {runOutput?.status === 'running' ? 'Running…' : 'Run ▶'}
         </button>
         <button
+          onClick={() => setStdinOpen((v) => !v)}
+          title="Program stdin"
+          className="btn-secondary"
+        >
+          {stdinOpen ? 'Hide stdin' : `Stdin${stdin ? ' •' : ''}`}
+        </button>
+        <button
           onClick={handleDownload}
           title="Download as file"
-          className="px-2 py-1 text-xs rounded border border-gray-800 hover:bg-gray-900 text-gray-300"
+          className="btn-secondary"
         >
           ↓ download
         </button>
         <button
           onClick={() => setChatOpen((v) => !v)}
-          className="px-2 py-1 text-xs rounded border border-gray-800 hover:bg-gray-900 text-gray-300"
+          className="btn-secondary"
         >
           {chatOpen ? 'Hide chat' : `Chat${messages.length ? ` (${messages.length})` : ''}`}
         </button>
-        <span className="text-xs text-gray-400 tabular-nums">
-          {peerCount} {peerCount === 1 ? 'user' : 'users'}
-        </span>
-        <span className="flex items-center gap-1.5 text-xs text-gray-400">
-          <span className={`inline-block h-2 w-2 rounded-full ${statusColor}`} />
+        <div className="flex items-center gap-1" title={peers.map((p) => p.name).join(', ')}>
+          {peers.slice(0, 5).map((p, i) => (
+            <span
+              key={`${p.name}-${i}`}
+              className="inline-flex h-5 w-5 rounded-full ring-2 ring-[color:var(--bg-base)] text-[10px] font-bold items-center justify-center text-white"
+              style={{ backgroundColor: p.color, marginLeft: i > 0 ? -8 : 0 }}
+            >
+              {p.name.slice(0, 1).toUpperCase()}
+            </span>
+          ))}
+          {peers.length > 5 && (
+            <span className="text-xs text-[color:var(--text-secondary)] ml-1">
+              +{peers.length - 5}
+            </span>
+          )}
+        </div>
+        <span className="flex items-center gap-1.5 text-xs text-[color:var(--text-secondary)]">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${statusColor} ${status === 'connected' ? 'pulse-dot' : ''}`}
+          />
           {status}
         </span>
       </header>
@@ -323,28 +370,36 @@ export default function Room() {
         {chatOpen && (
           <aside
             style={{
-              width: 280,
+              width: 300,
               flexShrink: 0,
               display: 'flex',
               flexDirection: 'column',
-              borderLeft: '1px solid rgb(31 41 55)',
+              borderLeft: '1px solid var(--border-subtle)',
+              background: 'var(--bg-surface)',
             }}
           >
-            <div style={{ flex: 1, overflow: 'auto' }} className="p-3 space-y-2">
+            <div className="px-3 py-2.5 border-b border-white/[0.06] text-xs font-medium text-[color:var(--text-secondary)] uppercase tracking-wide">
+              Chat · {messages.length}
+            </div>
+            <div style={{ flex: 1, overflow: 'auto' }} className="p-3 space-y-3">
               {messages.length === 0 ? (
-                <p className="text-xs text-gray-600">No messages yet.</p>
+                <p className="text-xs text-[color:var(--text-tertiary)]">
+                  No messages yet. Press Enter to send.
+                </p>
               ) : (
                 messages.map((m) => (
                   <div key={m.id}>
-                    <div className="text-xs font-medium" style={{ color: m.color }}>
+                    <div className="text-xs font-semibold mb-0.5" style={{ color: m.color }}>
                       {m.author}
                     </div>
-                    <div className="text-sm wrap-break-word whitespace-pre-wrap">{m.body}</div>
+                    <div className="text-sm wrap-break-word whitespace-pre-wrap text-[color:var(--text-primary)]">
+                      {m.body}
+                    </div>
                   </div>
                 ))
               )}
             </div>
-            <div style={{ borderTop: '1px solid rgb(31 41 55)' }} className="p-2 flex gap-1">
+            <div className="p-2 flex gap-1.5 border-t border-white/[0.06]">
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -355,12 +410,12 @@ export default function Room() {
                   }
                 }}
                 placeholder="Message…"
-                className="flex-1 px-2 py-1 text-xs bg-gray-900 border border-gray-800 rounded"
+                className="input-field flex-1 !py-1.5 !text-xs"
               />
               <button
                 onClick={sendMsg}
                 disabled={!draft.trim()}
-                className="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white"
+                className="btn-primary !py-1.5 !px-3 !text-xs"
               >
                 send
               </button>
@@ -368,50 +423,88 @@ export default function Room() {
           </aside>
         )}
       </div>
+      {stdinOpen && (
+        <div
+          style={{ flexShrink: 0, background: 'var(--bg-surface)' }}
+          className="border-t border-white/[0.06] px-4 py-2"
+        >
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-[color:var(--text-secondary)] font-semibold">
+              stdin
+            </span>
+            <span className="text-[10px] text-[color:var(--text-tertiary)]">
+              piped to the program on Run
+            </span>
+          </div>
+          <textarea
+            value={stdin}
+            onChange={(e) => setStdin(e.target.value)}
+            placeholder="e.g. input for readline / input() …"
+            spellCheck={false}
+            rows={3}
+            className="input-field w-full font-mono text-xs !py-2 resize-none"
+          />
+        </div>
+      )}
       {runOutput && (
         <div
-          style={{ height: 220, flexShrink: 0, overflow: 'auto' }}
-          className="border-t border-gray-800 p-3 font-mono text-xs bg-gray-950"
+          style={{ height: 240, flexShrink: 0, overflow: 'auto', background: 'var(--bg-surface)' }}
+          className="border-t border-white/[0.06] font-mono text-xs"
         >
-          <div className="text-gray-500 mb-2 flex items-center gap-2">
+          <div
+            style={{ background: 'var(--bg-surface)', position: 'sticky', top: 0, zIndex: 1 }}
+            className="px-4 py-2 border-b border-white/[0.06] text-[color:var(--text-secondary)] flex items-center gap-2"
+          >
             {runOutput.status === 'running' && (
               <>
-                <span className="inline-block h-2 w-2 rounded-full bg-yellow-500 animate-pulse" />
-                running · {runOutput.runBy}…
+                <span className="inline-block h-2 w-2 rounded-full bg-yellow-400 animate-pulse" />
+                <span className="text-[color:var(--text-primary)]">running</span>
+                <span>·</span>
+                <span>{runOutput.runBy}</span>
               </>
             )}
             {runOutput.status === 'done' && (
               <>
-                <span>
-                  {runOutput.runBy} · exit {runOutput.exitCode ?? '—'} · {runOutput.durationMs}ms
-                </span>
-                {runOutput.timedOut && (
-                  <span className="text-red-400">[timed out]</span>
-                )}
-                {runOutput.oomKilled && <span className="text-red-400">[oom killed]</span>}
+                <span
+                  className={`inline-block h-2 w-2 rounded-full ${
+                    runOutput.exitCode === 0 && !runOutput.timedOut && !runOutput.oomKilled
+                      ? 'bg-green-400'
+                      : 'bg-red-400'
+                  }`}
+                />
+                <span className="text-[color:var(--text-primary)]">{runOutput.runBy}</span>
+                <span>·</span>
+                <span>exit {runOutput.exitCode ?? '—'}</span>
+                <span>·</span>
+                <span>{runOutput.durationMs}ms</span>
+                {runOutput.timedOut && <span className="text-red-400">· timed out</span>}
+                {runOutput.oomKilled && <span className="text-red-400">· oom killed</span>}
               </>
             )}
             {runOutput.status === 'error' && (
               <span className="text-red-400">error: {runOutput.error}</span>
             )}
             {(runOutput.stdout || runOutput.stderr) && (
-              <button
-                onClick={copyOutput}
-                className="ml-auto text-xs px-2 py-0.5 rounded border border-gray-800 hover:bg-gray-900 text-gray-300"
-              >
+              <button onClick={copyOutput} className="ml-auto btn-secondary !py-0.5 !px-2">
                 {outputCopied ? 'copied!' : 'copy'}
               </button>
             )}
           </div>
-          {runOutput.stdout && (
-            <pre className="text-gray-100 whitespace-pre-wrap">{runOutput.stdout}</pre>
-          )}
-          {runOutput.stderr && (
-            <pre className="text-red-300 whitespace-pre-wrap">{runOutput.stderr}</pre>
-          )}
-          {runOutput.status === 'done' && !runOutput.stdout && !runOutput.stderr && (
-            <div className="text-gray-600">(no output)</div>
-          )}
+          <div className="px-4 py-3">
+            {runOutput.stdout && (
+              <pre className="text-[color:var(--text-primary)] whitespace-pre-wrap leading-relaxed">
+                {runOutput.stdout}
+              </pre>
+            )}
+            {runOutput.stderr && (
+              <pre className="text-red-300 whitespace-pre-wrap leading-relaxed">
+                {runOutput.stderr}
+              </pre>
+            )}
+            {runOutput.status === 'done' && !runOutput.stdout && !runOutput.stderr && (
+              <div className="text-[color:var(--text-tertiary)] italic">(no output)</div>
+            )}
+          </div>
         </div>
       )}
     </div>
