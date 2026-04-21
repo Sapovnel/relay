@@ -177,18 +177,41 @@ router.post('/:id/run', async (req, res: Response) => {
     return;
   }
 
-  if (!RUNNABLE_LANGUAGES.has(room.language)) {
-    res.status(400).json({ error: `language "${room.language}" is not runnable` });
-    return;
-  }
   const ydoc = (docs as Map<string, Y.Doc>).get(id);
   if (!ydoc) {
     res.status(400).json({ error: 'no active session for this room (open the room in a browser first)' });
     return;
   }
-  const code = ydoc.getText('monaco').toString();
-  const stdin = (req.body as { stdin?: unknown } | undefined)?.stdin;
-  const stdinStr = typeof stdin === 'string' ? stdin : '';
+
+  const body = (req.body as { stdin?: unknown; fileName?: unknown } | undefined) ?? {};
+  const stdinStr = typeof body.stdin === 'string' ? body.stdin : '';
+  const requestedFile = typeof body.fileName === 'string' ? body.fileName : null;
+
+  // Determine which file to run + its effective language.
+  const filesMap = ydoc.getMap('files') as Y.Map<Y.Text>;
+  const fileMetaMap = ydoc.getMap('fileMeta') as Y.Map<{ language?: string }>;
+  let code = '';
+  let runLanguage = room.language;
+  if (requestedFile && filesMap.has(requestedFile)) {
+    code = (filesMap.get(requestedFile) as Y.Text).toString();
+    const meta = fileMetaMap.get(requestedFile);
+    if (meta?.language) runLanguage = meta.language;
+  } else if (filesMap.size > 0) {
+    // No explicit file requested — pick the first file.
+    const firstName = Array.from(filesMap.keys())[0]!;
+    code = (filesMap.get(firstName) as Y.Text).toString();
+    const meta = fileMetaMap.get(firstName);
+    if (meta?.language) runLanguage = meta.language;
+  } else {
+    // Legacy single-file rooms stored source under a top-level Y.Text.
+    code = ydoc.getText('monaco').toString();
+  }
+
+  if (!RUNNABLE_LANGUAGES.has(runLanguage)) {
+    res.status(400).json({ error: `language "${runLanguage}" is not runnable` });
+    return;
+  }
+
   const runMap = ydoc.getMap('run');
 
   runMap.set('latest', {
@@ -201,7 +224,7 @@ router.post('/:id/run', async (req, res: Response) => {
     const upstream = await fetch(`${env.EXECUTOR_URL}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ language: room.language, code, stdin: stdinStr }),
+      body: JSON.stringify({ language: runLanguage, code, stdin: stdinStr }),
     });
     const result = (await upstream.json()) as Record<string, unknown>;
     runMap.set('latest', {

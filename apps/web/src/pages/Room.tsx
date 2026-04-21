@@ -17,14 +17,30 @@ const WS_URL = ((): string => {
 
 const LANGUAGES = ['javascript', 'typescript', 'python', 'markdown', 'plaintext'];
 const RUNNABLE = new Set(['javascript', 'python']);
+
 const LANG_EXT: Record<string, string> = {
   javascript: 'js',
   typescript: 'ts',
   python: 'py',
-  go: 'go',
   markdown: 'md',
   plaintext: 'txt',
 };
+
+const EXT_TO_LANG: Record<string, string> = {
+  js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  ts: 'typescript',
+  py: 'python',
+  md: 'markdown',
+  txt: 'plaintext',
+};
+
+function langFromFilename(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  return EXT_TO_LANG[ext] ?? 'plaintext';
+}
+
 const COLOR_PALETTE = [
   '#f43f5e',
   '#f59e0b',
@@ -72,6 +88,10 @@ interface ChatMsg {
   at: number;
 }
 
+interface FileMeta {
+  language?: string;
+}
+
 export default function Room() {
   const { id } = useParams();
   const roomId = id ?? 'unknown';
@@ -82,7 +102,6 @@ export default function Room() {
   const [runOutput, setRunOutput] = useState<RunView | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
-  const [language, setLanguage] = useState('javascript');
   const [peers, setPeers] = useState<
     { clientId: number; name: string; color: string; isMe: boolean }[]
   >([]);
@@ -94,39 +113,51 @@ export default function Room() {
   const [outputCopied, setOutputCopied] = useState(false);
   const [stdinOpen, setStdinOpen] = useState(false);
   const [stdin, setStdin] = useState('');
+  const [files, setFiles] = useState<string[]>([]);
+  const [activeFile, setActiveFile] = useState<string | null>(null);
+
+  const docRef = useRef<Y.Doc | null>(null);
+  const providerRef = useRef<WebsocketProvider | null>(null);
+  const bindingRef = useRef<MonacoBinding | null>(null);
+  const chatArrRef = useRef<Y.Array<ChatMsg> | null>(null);
+  const filesMapRef = useRef<Y.Map<Y.Text> | null>(null);
+  const fileMetaRef = useRef<Y.Map<FileMeta> | null>(null);
+  const handleRunRef = useRef<() => void>(() => {});
   const stdinRef = useRef(stdin);
+  const followingIdRef = useRef<number | null>(null);
+
   useEffect(() => {
     stdinRef.current = stdin;
   }, [stdin]);
-  const chatArrRef = useRef<Y.Array<ChatMsg> | null>(null);
-  const handleRunRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    followingIdRef.current = followingId;
+  }, [followingId]);
 
+  // Fetch room info once on mount.
   useEffect(() => {
     fetch(`/rooms/${roomId}`, { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : null))
       .then((room: RoomInfo | null) => {
-        if (!room) return;
-        setRoomInfo(room);
-        setLanguage(room.language);
+        if (room) setRoomInfo(room);
       })
       .catch(() => {});
   }, [roomId]);
 
-  useEffect(() => {
-    if (!ed || !monacoNs) return;
-    const model = ed.getModel();
-    if (model) monacoNs.editor.setModelLanguage(model, language);
-  }, [ed, monacoNs, language]);
-
+  // Main room session: create Y.Doc, provider, hook up awareness/chat/run/files.
+  // Note: does NOT create the MonacoBinding — that's in a separate effect below
+  // keyed on activeFile so we can swap files.
   useEffect(() => {
     if (!ed) return;
-    const model = ed.getModel();
-    if (!model) return;
 
     const doc = new Y.Doc();
     const provider = new WebsocketProvider(WS_URL, roomId, doc);
-    const yText = doc.getText('monaco');
-    const binding = new MonacoBinding(yText, model, new Set([ed]), provider.awareness);
+    docRef.current = doc;
+    providerRef.current = provider;
+
+    const filesMap = doc.getMap<Y.Text>('files');
+    const fileMetaMap = doc.getMap<FileMeta>('fileMeta');
+    filesMapRef.current = filesMap;
+    fileMetaRef.current = fileMetaMap;
 
     if (user) {
       provider.awareness.setLocalStateField('user', {
@@ -135,8 +166,8 @@ export default function Room() {
       });
     }
 
-    const onStatus = (event: { status: 'connecting' | 'connected' | 'disconnected' }) => {
-      setStatus(event.status);
+    const onStatus = (e: { status: 'connecting' | 'connected' | 'disconnected' }) => {
+      setStatus(e.status);
     };
     provider.on('status', onStatus);
 
@@ -160,7 +191,6 @@ export default function Room() {
     provider.awareness.on('change', onAwareness);
     onAwareness();
 
-    // Publish our own Monaco cursor position so others can follow us.
     const publishCursor = () => {
       const pos = ed.getPosition();
       if (!pos) return;
@@ -170,9 +200,7 @@ export default function Room() {
       });
     };
     const cursorDisposer = ed.onDidChangeCursorPosition(publishCursor);
-    publishCursor();
 
-    // Follow another peer: whenever their cursor moves, center it in the editor.
     const onFollow = () => {
       if (followingIdRef.current == null) return;
       const state = provider.awareness.getStates().get(followingIdRef.current) as
@@ -188,8 +216,7 @@ export default function Room() {
 
     const runMap = doc.getMap('run');
     const readRun = () => {
-      const latest = runMap.get('latest') as RunView | undefined;
-      setRunOutput(latest ?? null);
+      setRunOutput((runMap.get('latest') as RunView | undefined) ?? null);
     };
     runMap.observe(readRun);
     readRun();
@@ -200,7 +227,49 @@ export default function Room() {
     chatArr.observe(readChat);
     readChat();
 
+    // Once we have the initial state from the server, set up the file list.
+    // If this is a brand-new room (no files) we bootstrap a default file.
+    // If it's a legacy room that only has a top-level Y.Text, we migrate it.
+    const readFiles = () => {
+      setFiles(Array.from(filesMap.keys()).sort());
+    };
+    filesMap.observe(readFiles);
+
+    const onSync = (isSynced: boolean) => {
+      if (!isSynced) return;
+      // Room is fully synced with server — safe to initialize / migrate.
+      if (filesMap.size === 0) {
+        const legacyText = doc.getText('monaco').toString();
+        if (legacyText.length > 0) {
+          // migrate legacy single-file room into a new files map entry
+          const lang = roomInfo?.language ?? 'javascript';
+          const ext = LANG_EXT[lang] ?? 'txt';
+          const filename = `main.${ext}`;
+          doc.transact(() => {
+            const yt = new Y.Text();
+            yt.insert(0, legacyText);
+            filesMap.set(filename, yt);
+            fileMetaMap.set(filename, { language: lang });
+          });
+        } else {
+          const lang = roomInfo?.language ?? 'javascript';
+          const ext = LANG_EXT[lang] ?? 'txt';
+          const filename = `main.${ext}`;
+          doc.transact(() => {
+            filesMap.set(filename, new Y.Text());
+            fileMetaMap.set(filename, { language: lang });
+          });
+        }
+      }
+      // Pick first file as active if none selected yet.
+      setActiveFile((cur) => cur ?? Array.from(filesMap.keys()).sort()[0] ?? null);
+      readFiles();
+    };
+    provider.on('sync', onSync);
+
     return () => {
+      filesMap.unobserve(readFiles);
+      provider.off('sync', onSync);
       cursorDisposer.dispose();
       provider.awareness.off('change', onFollow);
       chatArr.unobserve(readChat);
@@ -208,19 +277,59 @@ export default function Room() {
       runMap.unobserve(readRun);
       provider.awareness.off('change', onAwareness);
       provider.off('status', onStatus);
-      binding.destroy();
+      if (bindingRef.current) {
+        bindingRef.current.destroy();
+        bindingRef.current = null;
+      }
       provider.destroy();
       doc.destroy();
+      docRef.current = null;
+      providerRef.current = null;
+      filesMapRef.current = null;
+      fileMetaRef.current = null;
     };
+    // roomInfo is intentionally not a dep — it's only used at migration time,
+    // after first sync. Re-running this effect would tear down the whole session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ed, roomId, user]);
 
-  const followingIdRef = useRef<number | null>(null);
+  // Monaco binding: swap when active file changes.
   useEffect(() => {
-    followingIdRef.current = followingId;
-  }, [followingId]);
+    if (!ed || !monacoNs) return;
+    const filesMap = filesMapRef.current;
+    const provider = providerRef.current;
+    if (!filesMap || !provider || !activeFile) return;
+    const yText = filesMap.get(activeFile);
+    if (!yText) return;
 
-  // Global Ctrl/Cmd+Shift+P to open the palette, even when Monaco is focused
-  // we register the same shortcut in addCommand below so Monaco doesn't swallow it.
+    // Out with the old binding.
+    if (bindingRef.current) {
+      bindingRef.current.destroy();
+      bindingRef.current = null;
+    }
+
+    const model = ed.getModel();
+    if (!model) return;
+
+    // Reset model to Y.Text content, then bind. MonacoBinding will keep them
+    // in sync from here on. Setting value before bind avoids a flash of stale text.
+    const nextLang =
+      fileMetaRef.current?.get(activeFile)?.language ?? langFromFilename(activeFile);
+    monacoNs.editor.setModelLanguage(model, nextLang);
+    model.setValue(yText.toString());
+
+    const binding = new MonacoBinding(yText, model, new Set([ed]), provider.awareness);
+    bindingRef.current = binding;
+
+    return () => {
+      if (bindingRef.current === binding) {
+        binding.destroy();
+        bindingRef.current = null;
+      }
+    };
+  }, [ed, monacoNs, activeFile]);
+
+  // Global Ctrl+Shift+P for the palette.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
@@ -232,19 +341,23 @@ export default function Room() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const runnable = RUNNABLE.has(language);
+  const activeLanguage =
+    (activeFile && fileMetaRef.current?.get(activeFile)?.language) ??
+    (activeFile && langFromFilename(activeFile)) ??
+    'javascript';
+  const runnable = RUNNABLE.has(activeLanguage);
   const canRun =
     status === 'connected' && !triggering && runOutput?.status !== 'running' && runnable;
 
   const handleRun = async () => {
-    if (triggering || !runnable) return;
+    if (triggering || !runnable || !activeFile) return;
     setTriggering(true);
     try {
       await fetch(`/rooms/${roomId}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ stdin: stdinRef.current }),
+        body: JSON.stringify({ stdin: stdinRef.current, fileName: activeFile }),
       });
     } finally {
       setTriggering(false);
@@ -255,14 +368,55 @@ export default function Room() {
     handleRunRef.current = handleRun;
   });
 
-  const handleLanguageChange = async (newLang: string) => {
-    setLanguage(newLang);
-    await fetch(`/rooms/${roomId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ language: newLang }),
-    }).catch(() => {});
+  const handleLanguageChange = (newLang: string) => {
+    if (!activeFile) return;
+    const metaMap = fileMetaRef.current;
+    if (!metaMap) return;
+    metaMap.set(activeFile, { ...(metaMap.get(activeFile) ?? {}), language: newLang });
+    if (ed && monacoNs) {
+      const model = ed.getModel();
+      if (model) monacoNs.editor.setModelLanguage(model, newLang);
+    }
+  };
+
+  const createFile = () => {
+    const filesMap = filesMapRef.current;
+    const metaMap = fileMetaRef.current;
+    const doc = docRef.current;
+    if (!filesMap || !metaMap || !doc) return;
+    const base = prompt('New file name:', 'util.js');
+    if (!base) return;
+    const name = base.trim();
+    if (!name) return;
+    if (filesMap.has(name)) {
+      alert(`${name} already exists.`);
+      return;
+    }
+    doc.transact(() => {
+      filesMap.set(name, new Y.Text());
+      metaMap.set(name, { language: langFromFilename(name) });
+    });
+    setActiveFile(name);
+  };
+
+  const deleteFile = (name: string) => {
+    const filesMap = filesMapRef.current;
+    const metaMap = fileMetaRef.current;
+    const doc = docRef.current;
+    if (!filesMap || !metaMap || !doc) return;
+    if (filesMap.size <= 1) {
+      alert("Can't delete the last file.");
+      return;
+    }
+    if (!confirm(`Delete ${name}?`)) return;
+    doc.transact(() => {
+      filesMap.delete(name);
+      metaMap.delete(name);
+    });
+    if (activeFile === name) {
+      const next = Array.from(filesMap.keys()).sort()[0] ?? null;
+      setActiveFile(next);
+    }
   };
 
   const sendMsg = () => {
@@ -281,15 +435,14 @@ export default function Room() {
   };
 
   const handleDownload = () => {
-    if (!ed) return;
+    if (!ed || !activeFile) return;
     const content = ed.getModel()?.getValue() ?? '';
-    const baseName = (roomInfo?.name ?? roomId).replace(/[^\w\-]+/g, '_') || 'sketch';
-    const filename = `${baseName}.${LANG_EXT[language] ?? 'txt'}`;
+    const safe = activeFile.replace(/[^\w\-.]+/g, '_');
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = safe || 'file.txt';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -308,33 +461,25 @@ export default function Room() {
     () => {
       const langCmds: Command[] = LANGUAGES.map((l) => ({
         id: `lang-${l}`,
-        label: `Switch language: ${l}`,
+        label: `Set file language: ${l}`,
         hint: RUNNABLE.has(l) ? 'runnable' : '',
         run: () => handleLanguageChange(l),
       }));
+      const fileCmds: Command[] = files.map((name) => ({
+        id: `file-${name}`,
+        label: `Open file: ${name}`,
+        run: () => setActiveFile(name),
+      }));
       return [
-        {
-          id: 'run',
-          label: 'Run code',
-          hint: 'Ctrl+Enter',
-          disabled: !canRun,
-          run: handleRun,
-        },
-        {
-          id: 'chat',
-          label: chatOpen ? 'Hide chat' : 'Open chat',
-          run: () => setChatOpen((v) => !v),
-        },
+        { id: 'run', label: 'Run code', hint: 'Ctrl+Enter', disabled: !canRun, run: handleRun },
+        { id: 'new-file', label: 'New file…', run: createFile },
+        { id: 'chat', label: chatOpen ? 'Hide chat' : 'Open chat', run: () => setChatOpen((v) => !v) },
         {
           id: 'stdin',
           label: stdinOpen ? 'Hide stdin input' : 'Show stdin input',
           run: () => setStdinOpen((v) => !v),
         },
-        {
-          id: 'download',
-          label: 'Download current file',
-          run: handleDownload,
-        },
+        { id: 'download', label: 'Download current file', run: handleDownload },
         {
           id: 'copy-link',
           label: 'Copy shareable link',
@@ -349,11 +494,12 @@ export default function Room() {
             window.location.href = '/';
           },
         },
+        ...fileCmds,
         ...langCmds,
       ];
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [canRun, chatOpen, stdinOpen, language, roomId],
+    [canRun, chatOpen, stdinOpen, activeLanguage, roomId, files, activeFile],
   );
 
   const statusColor =
@@ -391,8 +537,16 @@ export default function Room() {
         <span className="text-sm font-medium truncate max-w-xs text-[color:var(--text-primary)]">
           {roomInfo?.name ?? roomId}
         </span>
+        {activeFile && (
+          <>
+            <span className="text-[color:var(--text-tertiary)]">/</span>
+            <span className="text-sm font-mono text-[color:var(--text-secondary)]">
+              {activeFile}
+            </span>
+          </>
+        )}
         <select
-          value={language}
+          value={activeLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
           className="ml-1 input-field !py-1 !px-2 !text-xs"
         >
@@ -405,7 +559,7 @@ export default function Room() {
         <button
           onClick={handleRun}
           disabled={!canRun}
-          title={runnable ? 'Run (Ctrl+Enter)' : `${language} is not runnable`}
+          title={runnable ? 'Run (Ctrl+Enter)' : `${activeLanguage} is not runnable`}
           className="ml-auto btn-primary !py-1.5 !px-3 !text-xs"
         >
           {runOutput?.status === 'running' ? 'Running…' : 'Run ▶'}
@@ -480,13 +634,76 @@ export default function Room() {
         </span>
       </header>
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+        <aside
+          style={{
+            width: 200,
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            borderRight: '1px solid var(--border-subtle)',
+            background: 'var(--bg-surface)',
+          }}
+        >
+          <div className="px-3 py-2 border-b border-white/[0.06] flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wider text-[color:var(--text-secondary)] font-semibold">
+              Files
+            </span>
+            <button onClick={createFile} title="New file" className="btn-secondary !px-1.5 !py-0.5 !text-xs">
+              +
+            </button>
+          </div>
+          <ul className="flex-1 overflow-auto py-1">
+            {files.length === 0 ? (
+              <li className="px-3 py-1.5 text-xs text-[color:var(--text-tertiary)]">
+                No files yet
+              </li>
+            ) : (
+              files.map((name) => (
+                <li
+                  key={name}
+                  className={`group px-3 py-1.5 flex items-center gap-2 cursor-pointer text-xs font-mono ${
+                    name === activeFile
+                      ? 'bg-white/[0.05] text-[color:var(--text-primary)]'
+                      : 'text-[color:var(--text-secondary)] hover:bg-white/[0.03]'
+                  }`}
+                  onClick={() => setActiveFile(name)}
+                >
+                  <span
+                    className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+                    style={{
+                      background:
+                        langFromFilename(name) === 'javascript'
+                          ? '#f7df1e'
+                          : langFromFilename(name) === 'typescript'
+                            ? '#3178c6'
+                            : langFromFilename(name) === 'python'
+                              ? '#3572a5'
+                              : '#9aa0a6',
+                    }}
+                  />
+                  <span className="truncate flex-1">{name}</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteFile(name);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 text-[color:var(--text-tertiary)] hover:text-red-400"
+                    title="Delete file"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+        </aside>
         <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
           <div style={{ position: 'absolute', inset: 0 }}>
             <Editor
               key={roomId}
               height="100%"
               width="100%"
-              defaultLanguage={language}
+              defaultLanguage="javascript"
               theme="vs-dark"
               onMount={(editor, monaco) => {
                 setEd(editor);
