@@ -66,3 +66,16 @@ export async function checkRateLimit(
   )) as [number, number];
   return { allowed: res[0] === 1, retryAfterSec: res[1] };
 }
+
+export async function pingRedis(): Promise<boolean> {
+  try {
+    const reply = await pub.ping();
+    return reply === 'PONG';
+  } catch {
+    return false;
+  }
+}
+
+export async function closeRedis(): Promise<void> {
+  await Promise.allSettled([pub.quit(), sub.quit()]);
+}

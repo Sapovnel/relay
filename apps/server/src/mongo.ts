@@ -64,3 +64,12 @@ export async function closeMongo(): Promise<void> {
   client = null;
   db = null;
 }
+
+export async function pingMongo(): Promise<boolean> {
+  try {
+    await requireDb().command({ ping: 1 });
+    return true;
+  } catch {
+    return false;
+  }
+}

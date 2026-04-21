@@ -1,0 +1,67 @@
+# Fly.io deploy config for the collab server.
+#
+# This deploys ONLY apps/server. The executor needs a host Docker socket and is
+# best run on its own VM (or a managed sandbox like Modal) — not on Fly.
+# Mongo and Redis here are external (Atlas + Upstash respectively); set their
+# URLs in `fly secrets`:
+#
+#   fly secrets set \
+#     JWT_SECRET=$(openssl rand -hex 32) \
+#     MONGO_URL='mongodb+srv://...' \
+#     REDIS_URL='redis://default:...@...:6379' \
+#     EXECUTOR_URL='https://executor.your-domain.dev' \
+#     WEB_ORIGIN='https://codee.your-domain.dev' \
+#     GITHUB_CLIENT_ID=... \
+#     GITHUB_CLIENT_SECRET=...
+#
+#   fly deploy
+#
+# Sticky sessions are required so a given client always reaches the same
+# instance (Yjs-aware load balancing isn't needed because Redis pub/sub
+# replicates updates anyway — but sticky avoids unnecessary cross-instance
+# traffic and keeps the awareness state consistent).
+
+app = "codee-server"
+primary_region = "ord"
+
+[build]
+  dockerfile = "apps/server/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "4000"
+  DEV_LOGIN = "false"
+
+[[services]]
+  internal_port = 4000
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+
+  [[services.http_checks]]
+    interval = "30s"
+    grace_period = "10s"
+    method = "get"
+    path = "/ready"
+    protocol = "http"
+    timeout = "5s"
+
+# Sticky sessions via cookie-based affinity at the proxy.
+[experimental]
+  auto_rollback = true
