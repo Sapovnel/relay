@@ -16,6 +16,14 @@ const WS_URL = ((): string => {
 
 const LANGUAGES = ['javascript', 'typescript', 'python', 'markdown', 'plaintext'];
 const RUNNABLE = new Set(['javascript', 'python']);
+const LANG_EXT: Record<string, string> = {
+  javascript: 'js',
+  typescript: 'ts',
+  python: 'py',
+  go: 'go',
+  markdown: 'md',
+  plaintext: 'txt',
+};
 const COLOR_PALETTE = [
   '#f43f5e',
   '#f59e0b',
@@ -194,6 +202,22 @@ export default function Room() {
     setDraft('');
   };
 
+  const handleDownload = () => {
+    if (!ed) return;
+    const content = ed.getModel()?.getValue() ?? '';
+    const baseName = (roomInfo?.name ?? roomId).replace(/[^\w\-]+/g, '_') || 'sketch';
+    const filename = `${baseName}.${LANG_EXT[language] ?? 'txt'}`;
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const copyOutput = async () => {
     if (!runOutput) return;
     const text = [runOutput.stdout, runOutput.stderr].filter(Boolean).join('\n');
@@ -249,6 +273,13 @@ export default function Room() {
           className="ml-auto px-3 py-1 text-xs font-medium bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded text-white"
         >
           {runOutput?.status === 'running' ? 'Running…' : 'Run ▶'}
+        </button>
+        <button
+          onClick={handleDownload}
+          title="Download as file"
+          className="px-2 py-1 text-xs rounded border border-gray-800 hover:bg-gray-900 text-gray-300"
+        >
+          ↓ download
         </button>
         <button
           onClick={() => setChatOpen((v) => !v)}

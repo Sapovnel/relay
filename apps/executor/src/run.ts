@@ -22,7 +22,12 @@ interface LangConfig {
   // If true, the runner reads source from stdin. If false, code travels through argv
   // and stdin is NOT attached (otherwise the runtime hangs waiting for EOF).
   viaStdin: boolean;
+  // Extra env vars to inject. Used by languages that need the code as a file on disk
+  // (e.g. Go) — we base64 the code and decode it inside the sandbox to avoid ARG_MAX
+  // issues with very long argv strings and to keep binary-safe delivery.
+  makeEnv?: (code: string) => string[];
   timeoutMs?: number;
+  memoryMB?: number;
 }
 
 // argv is always passed as an array — there is no shell interpolation, so code strings
@@ -40,10 +45,12 @@ const LANGS: Record<string, LangConfig> = {
     makeCmd: (code) => ['python3', '-c', code],
     viaStdin: false,
   },
-  // Go is ready architecturally (the viaStdin + sh -c pipeline works for any language
-  // that needs a real file on disk), but `cat > file` over the attached stdin stream is
-  // hanging in this environment — likely a docker-modem HttpDuplex.end() quirk. Keeping
-  // the scaffolding but leaving Go disabled until that's diagnosed.
+  // Go is still disabled. Reached two blockers this pass:
+  //   1. `go run` on half a CPU compiles hello-world in ~40 s — timeout UX is bad.
+  //   2. Docker Desktop on Windows (WSL2) mounts tmpfs with noexec by default, so
+  //      even after compile, the linker output at /tmp/go-build*/b001/exe/main can't
+  //      fork/exec. Fix needs either a non-tmpfs writable mount with exec, or a
+  //      warm go-build cache container pool.
 };
 
 export function supportedLanguages(): string[] {
@@ -91,6 +98,7 @@ export async function run(language: string, code: string): Promise<RunResult> {
   const tmpfsSize = language === 'go' ? '128m' : '16m';
 
   const started = Date.now();
+  const extraEnv = cfg.makeEnv?.(code) ?? [];
   const container = await docker.createContainer({
     name: `codee-run-${randomUUID().slice(0, 8)}`,
     Image: cfg.image,
@@ -102,6 +110,7 @@ export async function run(language: string, code: string): Promise<RunResult> {
       'NODE_OPTIONS=--no-warnings',
       'GOCACHE=/tmp/gocache',
       'GOPATH=/tmp/gopath',
+      ...extraEnv,
     ],
     NetworkDisabled: true,
     AttachStdin: cfg.viaStdin,
@@ -112,8 +121,8 @@ export async function run(language: string, code: string): Promise<RunResult> {
     Tty: false,
     StopTimeout: 0,
     HostConfig: {
-      Memory: 128 * 1024 * 1024,
-      MemorySwap: 128 * 1024 * 1024,
+      Memory: (cfg.memoryMB ?? 128) * 1024 * 1024,
+      MemorySwap: (cfg.memoryMB ?? 128) * 1024 * 1024,
       NanoCpus: 500_000_000,
       PidsLimit: 64,
       ReadonlyRootfs: true,
