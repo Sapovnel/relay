@@ -9,22 +9,46 @@ import { connectMongo } from './mongo.js';
 import { setupPersistence } from './persistence.js';
 import { authRouter, getSessionFromCookie, type SessionUser } from './auth.js';
 import { roomsRouter, isMember } from './rooms.js';
+import { installSyncHandler } from './sync.js';
+import { logger, httpLogger } from './logger.js';
+import { registry, httpRequests, httpDuration, wsConnections } from './metrics.js';
+import { INSTANCE_ID } from './redis.js';
 
 async function main() {
   await connectMongo();
+  installSyncHandler();
   setupPersistence();
 
   const app = express();
+  app.use(httpLogger);
   app.use(cookieParser());
   app.use(express.json());
-  app.use((req, _res, next) => {
-    console.log(`${req.method} ${req.url}`);
+
+  // Prometheus-friendly HTTP metrics middleware.
+  app.use((req, res, next) => {
+    const start = process.hrtime.bigint();
+    res.on('finish', () => {
+      const durSec = Number(process.hrtime.bigint() - start) / 1e9;
+      const path = (req.route?.path ?? req.path).replace(/[0-9a-f]{24}/gi, ':id');
+      const labels = {
+        method: req.method,
+        path,
+        status: String(res.statusCode),
+      };
+      httpRequests.inc(labels);
+      httpDuration.observe(labels, durSec);
+    });
     next();
   });
+
   app.use('/auth', authRouter);
   app.use('/rooms', roomsRouter);
   app.get('/health', (_req, res) => {
-    res.json({ ok: true });
+    res.json({ ok: true, instance: INSTANCE_ID });
+  });
+  app.get('/metrics', async (_req, res) => {
+    res.setHeader('Content-Type', registry.contentType);
+    res.send(await registry.metrics());
   });
 
   const server = createServer(app);
@@ -58,15 +82,17 @@ async function main() {
     const docName = url.pathname.replace(/^\/+/, '');
     setupWSConnection(ws, req, { docName, gc: true });
     const user = (ws as typeof ws & { user: SessionUser }).user;
-    console.log(`ws: "${user.login}" joined "${docName}"`);
+    wsConnections.inc();
+    ws.on('close', () => wsConnections.dec());
+    logger.info({ login: user.login, room: docName }, 'ws joined');
   });
 
   server.listen(env.PORT, () => {
-    console.log(`collab server listening on http://localhost:${env.PORT}`);
+    logger.info({ port: env.PORT, instance: INSTANCE_ID }, 'collab server ready');
   });
 }
 
 main().catch((err) => {
-  console.error('server failed to start:', err);
+  logger.error({ err }, 'server failed to start');
   process.exit(1);
 });

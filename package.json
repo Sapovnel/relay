@@ -13,7 +13,10 @@
     "dev:executor": "npm --workspace apps/executor run dev",
     "mongo:up": "docker compose up -d mongo",
     "mongo:down": "docker compose down",
-    "mongo:logs": "docker compose logs -f mongo"
+    "mongo:logs": "docker compose logs -f mongo",
+    "infra:up": "docker compose up -d mongo redis",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f"
   },
   "engines": {
     "node": ">=20"

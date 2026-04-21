@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 // @ts-expect-error — y-websocket ships JS with no bundled types for this path
 import { setPersistence } from 'y-websocket/bin/utils';
 import { snapshots } from './mongo.js';
+import { attachRedisSync } from './sync.js';
 
 const DEBOUNCE_MS = 5000;
 const debounceTimers = new Map<string, NodeJS.Timeout>();
@@ -25,6 +26,10 @@ function asBytes(state: unknown): Uint8Array {
 export function setupPersistence(): void {
   setPersistence({
     bindState: async (docName: string, ydoc: Y.Doc) => {
+      // Wire the doc to the Redis bus before replaying local state, so updates
+      // that happen while we hydrate still fan out correctly.
+      await attachRedisSync(docName, ydoc);
+
       const existing = await snapshots().findOne({ roomId: docName });
       if (existing?.state) {
         Y.applyUpdate(ydoc, asBytes(existing.state));

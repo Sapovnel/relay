@@ -10,6 +10,10 @@ export const env = {
   WEB_ORIGIN: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
   DEV_LOGIN: (process.env.DEV_LOGIN ?? 'true').toLowerCase() === 'true',
   EXECUTOR_URL: process.env.EXECUTOR_URL ?? 'http://localhost:4100',
+  REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6379',
+  INSTANCE_ID: process.env.INSTANCE_ID ?? '',
+  RUN_RATE_LIMIT: Number(process.env.RUN_RATE_LIMIT ?? 10),
+  RUN_RATE_WINDOW_MS: Number(process.env.RUN_RATE_WINDOW_MS ?? 60_000),
 };
 
 export const GITHUB_CALLBACK = `${env.WEB_ORIGIN}/auth/github/callback`;

@@ -3,6 +3,8 @@ import { ObjectId, type WithId } from 'mongodb';
 import { requireAuth, type SessionUser } from './auth.js';
 import { rooms, snapshots, type RoomDoc } from './mongo.js';
 import { env } from './env.js';
+import { checkRateLimit } from './redis.js';
+import { runsTotal, runDuration, rateLimitDenied } from './metrics.js';
 // @ts-expect-error — y-websocket ships JS with no bundled types for this path
 import { docs } from 'y-websocket/bin/utils';
 import * as Y from 'yjs';
@@ -273,6 +275,22 @@ router.post('/:id/run', async (req, res: Response) => {
     return;
   }
 
+  // Per-user sliding-window rate limit for /run (default 10 per 60 s).
+  const limit = await checkRateLimit(
+    `ratelimit:run:${user.sub}`,
+    env.RUN_RATE_LIMIT,
+    env.RUN_RATE_WINDOW_MS,
+  );
+  if (!limit.allowed) {
+    rateLimitDenied.inc({ bucket: 'run' });
+    res.setHeader('Retry-After', String(limit.retryAfterSec));
+    res.status(429).json({
+      error: 'rate limit exceeded',
+      retryAfterSec: limit.retryAfterSec,
+    });
+    return;
+  }
+
   const runMap = ydoc.getMap('run');
 
   runMap.set('latest', {
@@ -281,13 +299,28 @@ router.post('/:id/run', async (req, res: Response) => {
     startedAt: Date.now(),
   });
 
+  const runTimer = runDuration.startTimer({ language: runLanguage });
   try {
     const upstream = await fetch(`${env.EXECUTOR_URL}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ language: runLanguage, code, stdin: stdinStr }),
     });
-    const result = (await upstream.json()) as Record<string, unknown>;
+    const result = (await upstream.json()) as Record<string, unknown> & {
+      exitCode?: number | null;
+      timedOut?: boolean;
+      oomKilled?: boolean;
+    };
+    runTimer();
+    const outcome =
+      result.timedOut === true
+        ? 'timeout'
+        : result.oomKilled === true
+          ? 'oom'
+          : result.exitCode === 0
+            ? 'success'
+            : 'failure';
+    runsTotal.inc({ language: runLanguage, outcome });
     runMap.set('latest', {
       status: 'done',
       runBy: user.login,
@@ -296,7 +329,8 @@ router.post('/:id/run', async (req, res: Response) => {
     });
     res.json(result);
   } catch (err) {
-    console.error('executor request failed:', err);
+    runTimer();
+    runsTotal.inc({ language: runLanguage, outcome: 'executor_error' });
     runMap.set('latest', {
       status: 'error',
       runBy: user.login,
