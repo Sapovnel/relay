@@ -82,7 +82,10 @@ export default function Room() {
   const [triggering, setTriggering] = useState(false);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [language, setLanguage] = useState('javascript');
-  const [peers, setPeers] = useState<{ name: string; color: string }[]>([]);
+  const [peers, setPeers] = useState<
+    { clientId: number; name: string; color: string; isMe: boolean }[]
+  >([]);
+  const [followingId, setFollowingId] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
@@ -135,18 +138,51 @@ export default function Room() {
     };
     provider.on('status', onStatus);
 
+    const myClientId = provider.awareness.clientID;
     const onAwareness = () => {
-      const states = Array.from(provider.awareness.getStates().values()) as {
-        user?: { name: string; color: string };
-      }[];
+      const entries = Array.from(provider.awareness.getStates().entries()) as [
+        number,
+        { user?: { name: string; color: string } },
+      ][];
       setPeers(
-        states
-          .filter((s) => s.user)
-          .map((s) => ({ name: s.user!.name, color: s.user!.color })),
+        entries
+          .filter(([, s]) => s.user)
+          .map(([clientId, s]) => ({
+            clientId,
+            name: s.user!.name,
+            color: s.user!.color,
+            isMe: clientId === myClientId,
+          })),
       );
     };
     provider.awareness.on('change', onAwareness);
     onAwareness();
+
+    // Publish our own Monaco cursor position so others can follow us.
+    const publishCursor = () => {
+      const pos = ed.getPosition();
+      if (!pos) return;
+      provider.awareness.setLocalStateField('monacoCursor', {
+        lineNumber: pos.lineNumber,
+        column: pos.column,
+      });
+    };
+    const cursorDisposer = ed.onDidChangeCursorPosition(publishCursor);
+    publishCursor();
+
+    // Follow another peer: whenever their cursor moves, center it in the editor.
+    const onFollow = () => {
+      if (followingIdRef.current == null) return;
+      const state = provider.awareness.getStates().get(followingIdRef.current) as
+        | { monacoCursor?: { lineNumber: number; column: number } }
+        | undefined;
+      if (!state?.monacoCursor) return;
+      ed.revealPositionInCenterIfOutsideViewport({
+        lineNumber: state.monacoCursor.lineNumber,
+        column: state.monacoCursor.column,
+      });
+    };
+    provider.awareness.on('change', onFollow);
 
     const runMap = doc.getMap('run');
     const readRun = () => {
@@ -163,6 +199,8 @@ export default function Room() {
     readChat();
 
     return () => {
+      cursorDisposer.dispose();
+      provider.awareness.off('change', onFollow);
       chatArr.unobserve(readChat);
       chatArrRef.current = null;
       runMap.unobserve(readRun);
@@ -173,6 +211,11 @@ export default function Room() {
       doc.destroy();
     };
   }, [ed, roomId, user]);
+
+  const followingIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    followingIdRef.current = followingId;
+  }, [followingId]);
 
   const runnable = RUNNABLE.has(language);
 
@@ -319,20 +362,46 @@ export default function Room() {
         >
           {chatOpen ? 'Hide chat' : `Chat${messages.length ? ` (${messages.length})` : ''}`}
         </button>
-        <div className="flex items-center gap-1" title={peers.map((p) => p.name).join(', ')}>
-          {peers.slice(0, 5).map((p, i) => (
-            <span
-              key={`${p.name}-${i}`}
-              className="inline-flex h-5 w-5 rounded-full ring-2 ring-[color:var(--bg-base)] text-[10px] font-bold items-center justify-center text-white"
-              style={{ backgroundColor: p.color, marginLeft: i > 0 ? -8 : 0 }}
-            >
-              {p.name.slice(0, 1).toUpperCase()}
-            </span>
-          ))}
+        <div className="flex items-center gap-1">
+          {peers.slice(0, 5).map((p, i) => {
+            const isFollowed = followingId === p.clientId;
+            return (
+              <button
+                key={`${p.clientId}-${i}`}
+                onClick={() => {
+                  if (p.isMe) return;
+                  setFollowingId((cur) => (cur === p.clientId ? null : p.clientId));
+                }}
+                title={
+                  p.isMe
+                    ? `${p.name} (you)`
+                    : isFollowed
+                      ? `Following ${p.name} — click to stop`
+                      : `Click to follow ${p.name}`
+                }
+                disabled={p.isMe}
+                className={`inline-flex h-6 w-6 rounded-full text-[10px] font-bold items-center justify-center text-white transition ${
+                  p.isMe ? 'cursor-default' : 'cursor-pointer hover:scale-110'
+                } ${isFollowed ? 'ring-2 ring-[color:var(--accent)] ring-offset-2 ring-offset-[color:var(--bg-base)]' : 'ring-2 ring-[color:var(--bg-base)]'}`}
+                style={{ backgroundColor: p.color, marginLeft: i > 0 ? -8 : 0 }}
+              >
+                {p.name.slice(0, 1).toUpperCase()}
+              </button>
+            );
+          })}
           {peers.length > 5 && (
             <span className="text-xs text-[color:var(--text-secondary)] ml-1">
               +{peers.length - 5}
             </span>
+          )}
+          {followingId !== null && (
+            <button
+              onClick={() => setFollowingId(null)}
+              className="ml-2 text-[10px] uppercase tracking-wider text-[color:var(--accent)] hover:text-white transition"
+              title="Stop following (Esc)"
+            >
+              ● following
+            </button>
           )}
         </div>
         <span className="flex items-center gap-1.5 text-xs text-[color:var(--text-secondary)]">
