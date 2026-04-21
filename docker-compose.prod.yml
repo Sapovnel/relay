@@ -1,0 +1,73 @@
+# Production-style topology: every service runs in its own container, an
+# internal network keeps the executor off the public interface, and the web
+# tier is the only thing users hit directly.
+#
+# Bring up: docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+#
+# The executor mounts the host Docker socket — that's a root-equivalent grant,
+# which is why it's isolated to the internal `backplane` network and only the
+# collab server can reach it.
+services:
+  mongo:
+    networks: [backplane]
+
+  redis:
+    networks: [backplane]
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    container_name: codee-server
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: codee
+      REDIS_URL: redis://redis:6379
+      EXECUTOR_URL: http://executor:4100
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env before deploying}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      DEV_LOGIN: ${DEV_LOGIN:-false}
+      RUN_RATE_LIMIT: ${RUN_RATE_LIMIT:-10}
+      RUN_RATE_WINDOW_MS: ${RUN_RATE_WINDOW_MS:-60000}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [backplane]
+    restart: unless-stopped
+
+  executor:
+    build:
+      context: .
+      dockerfile: apps/executor/Dockerfile
+    container_name: codee-executor
+    environment:
+      NODE_ENV: production
+      PORT: "4100"
+    volumes:
+      # Needed to spawn sandbox containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [backplane]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: codee-web
+    ports:
+      - "80:80"
+    depends_on:
+      server:
+        condition: service_started
+    networks: [backplane]
+    restart: unless-stopped
+
+networks:
+  backplane:
+    driver: bridge
