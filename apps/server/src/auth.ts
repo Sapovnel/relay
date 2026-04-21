@@ -145,16 +145,43 @@ if (GITHUB_ENABLED) {
 }
 
 if (env.DEV_LOGIN) {
-  router.get('/dev-login', async (_req, res) => {
-    const DEV_GITHUB_ID = -1;
+  // Accepts ?as=<username> so multiple people on the same LAN can each have
+  // their own account without setting up GitHub OAuth. The username is hashed
+  // into a stable negative githubId (real GitHub ids are positive, so there
+  // can't be a collision with an OAuth-created account). Slug constraints
+  // keep displayed names sane.
+  const DEV_USER_RX = /^[a-z0-9][a-z0-9_-]{0,30}$/i;
+  const hashIdFromName = (name: string): number => {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+    // Map into the negative range so we never collide with real GitHub ids.
+    return -((Math.abs(h) % 1_000_000_000) + 1);
+  };
+
+  router.get('/dev-login', async (req, res) => {
+    const requested =
+      typeof req.query.as === 'string' && req.query.as.trim()
+        ? req.query.as.trim().toLowerCase()
+        : 'devuser';
+    if (!DEV_USER_RX.test(requested)) {
+      res
+        .status(400)
+        .send(
+          'dev-login: ?as=<name> must be 1-31 chars of letters, digits, hyphen or underscore',
+        );
+      return;
+    }
+    const githubId = hashIdFromName(requested);
     const now = new Date();
     const result = await users().findOneAndUpdate(
-      { githubId: DEV_GITHUB_ID },
+      { githubId },
       {
         $set: {
-          login: 'devuser',
-          name: 'Dev User',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/0?v=4',
+          login: requested,
+          name: requested,
+          avatarUrl: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(
+            requested,
+          )}`,
         },
         $setOnInsert: { createdAt: now },
       },

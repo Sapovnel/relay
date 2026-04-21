@@ -1,6 +1,36 @@
 import { Link } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useAuth } from '../auth/AuthProvider';
+
+function DevLogin() {
+  const [name, setName] = useState('');
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = name.trim().toLowerCase();
+    if (!trimmed) {
+      window.location.href = '/auth/dev-login';
+      return;
+    }
+    window.location.href = `/auth/dev-login?as=${encodeURIComponent(trimmed)}`;
+  };
+  return (
+    <form onSubmit={submit} className="flex gap-2 items-center">
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="username (e.g. alice)"
+        pattern="[A-Za-z0-9_-]{1,31}"
+        className="input-field !text-sm w-48"
+      />
+      <button type="submit" className="btn-secondary">
+        Dev login
+      </button>
+      <span className="text-xs text-[color:var(--text-tertiary)]">
+        leave blank for &lsquo;devuser&rsquo;
+      </span>
+    </form>
+  );
+}
 
 interface Room {
   id: string;
@@ -165,14 +195,7 @@ export default function Home() {
                     Sign in with GitHub
                   </a>
                 )}
-                {cfg.devLogin && (
-                  <a
-                    href="/auth/dev-login"
-                    className="btn-secondary inline-flex items-center gap-1.5"
-                  >
-                    Dev login <span className="text-[color:var(--text-tertiary)]">(skip GitHub)</span>
-                  </a>
-                )}
+                {cfg.devLogin && <DevLogin />}
               </div>
             </div>
           </div>
