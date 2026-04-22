@@ -5,6 +5,7 @@ import Home from './pages/Home';
 import Room from './pages/Room';
 import Join from './pages/Join';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import './index.css';
 
 function Protected({ children }: { children: ReactElement }) {
@@ -15,27 +16,31 @@ function Protected({ children }: { children: ReactElement }) {
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <AuthProvider>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route
-          path="/room/:id"
-          element={
-            <Protected>
-              <Room />
-            </Protected>
-          }
-        />
-        <Route
-          path="/join/:id"
-          element={
-            <Protected>
-              <Join />
-            </Protected>
-          }
-        />
-      </Routes>
-    </BrowserRouter>
-  </AuthProvider>,
+  <ErrorBoundary>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route
+            path="/room/:id"
+            element={
+              <Protected>
+                <ErrorBoundary>
+                  <Room />
+                </ErrorBoundary>
+              </Protected>
+            }
+          />
+          <Route
+            path="/join/:id"
+            element={
+              <Protected>
+                <Join />
+              </Protected>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
+  </ErrorBoundary>,
 );
