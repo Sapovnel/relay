@@ -23,7 +23,7 @@ export default function Join() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-8">
-      <h1 className="text-3xl font-bold mb-4">codeE</h1>
+      <h1 className="text-3xl font-bold mb-4 wordmark wordmark-accent">Relay</h1>
       {error ? (
         <div>
           <p className="text-red-400 mb-4">{error}</p>

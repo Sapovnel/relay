@@ -42,12 +42,12 @@ interface LangConfig {
 // haven't been built yet.
 const LANGS: Record<string, LangConfig> = {
   javascript: {
-    image: 'codee-runner-node:latest',
+    image: 'relay-runner-node:latest',
     makeCmd: (code) => ['node', '-e', code],
     viaStdin: false,
   },
   python: {
-    image: 'codee-runner-python:latest',
+    image: 'relay-runner-python:latest',
     makeCmd: (code) => ['python3', '-c', code],
     viaStdin: false,
   },
@@ -146,7 +146,7 @@ export async function run(
   }
 
   const container = await docker.createContainer({
-    name: `codee-run-${randomUUID().slice(0, 8)}`,
+    name: `relay-run-${randomUUID().slice(0, 8)}`,
     Image: image,
     Cmd: cfg.makeCmd(effectiveCode),
     User: 'nobody',

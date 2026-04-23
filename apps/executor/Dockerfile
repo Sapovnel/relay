@@ -10,7 +10,7 @@ COPY apps/web/package.json ./apps/web/
 RUN npm ci
 
 COPY apps/executor ./apps/executor
-RUN npm run build --workspace @codee/executor
+RUN npm run build --workspace @relay/executor
 
 # ---- runner ----
 FROM node:20-alpine AS runner
@@ -30,7 +30,7 @@ COPY package.json package-lock.json ./
 COPY apps/server/package.json ./apps/server/
 COPY apps/executor/package.json ./apps/executor/
 COPY apps/web/package.json ./apps/web/
-RUN npm ci --omit=dev --workspace @codee/executor --include-workspace-root
+RUN npm ci --omit=dev --workspace @relay/executor --include-workspace-root
 
 COPY --from=builder /app/apps/executor/dist ./apps/executor/dist
 

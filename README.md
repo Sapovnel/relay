@@ -1,4 +1,4 @@
-# codeE — Real-Time Collaborative Code Editor
+# Relay — Real-Time Collaborative Code Editor
 
 A browser-based code editor where multiple users edit **and run** code together in real time. Google Docs for code, with a hardened sandbox for execution and a horizontally-scalable sync tier.
 
@@ -70,7 +70,7 @@ A browser-based code editor where multiple users edit **and run** code together 
 | MongoDB         | 27017 | Users, rooms, Yjs snapshots                              |
 | Redis           | 6379  | Cross-instance Yjs fan-out + sliding-window rate limits  |
 
-Horizontal scaling: each `apps/server` instance subscribes to `codee:sync:<roomId>` and publishes local Y.Doc updates tagged with its instance id. Other instances apply incoming updates with an `origin` marker so they're not re-published. With Mongo + Redis as shared state, the tier scales behind a sticky-session (IP-hash or cookie-pinned) load balancer.
+Horizontal scaling: each `apps/server` instance subscribes to `relay:sync:<roomId>` and publishes local Y.Doc updates tagged with its instance id. Other instances apply incoming updates with an `origin` marker so they're not re-published. With Mongo + Redis as shared state, the tier scales behind a sticky-session (IP-hash or cookie-pinned) load balancer.
 
 ## Tech stack
 
@@ -153,10 +153,10 @@ Every `POST /run` spawns a fresh container with all of:
 ## Observability
 
 - **`GET /metrics`** — Prometheus text format
-  - `codee_http_requests_total{method,path,status}`, `codee_http_request_duration_seconds` histogram
-  - `codee_runs_total{language,outcome}` where outcome ∈ {success, failure, timeout, oom, executor_error}
-  - `codee_run_duration_seconds{language}` histogram
-  - `codee_ws_connections` gauge, `codee_rate_limit_denied_total{bucket}` counter
+  - `relay_http_requests_total{method,path,status}`, `relay_http_request_duration_seconds` histogram
+  - `relay_runs_total{language,outcome}` where outcome ∈ {success, failure, timeout, oom, executor_error}
+  - `relay_run_duration_seconds{language}` histogram
+  - `relay_ws_connections` gauge, `relay_rate_limit_denied_total{bucket}` counter
   - Plus default node.js metrics via `prom-client`
 - **Structured logs** (pino) with `x-request-id` echoed back to callers and attached to every log line inside a request.
 
@@ -165,7 +165,7 @@ Every `POST /run` spawns a fresh container with all of:
 ### Unit/integration by hand
 
 1. Dev login → create room → two tabs → type → both tabs converge instantly
-2. `while(true){}` → Run → `[timed out]` after 5 s, no leaked containers (`docker ps -a --filter name=codee-run` is empty)
+2. `while(true){}` → Run → `[timed out]` after 5 s, no leaked containers (`docker ps -a --filter name=relay-run` is empty)
 3. `require('fs').readFileSync('/etc/passwd')` → read-only or permission error from the sandbox
 4. Stop server → restart → reload → code is still there (Yjs snapshot)
 5. Rate limiting: 11 runs in 60 s → 11th returns HTTP 429 with `Retry-After`

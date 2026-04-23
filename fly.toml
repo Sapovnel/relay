@@ -10,7 +10,7 @@
 #     MONGO_URL='mongodb+srv://...' \
 #     REDIS_URL='redis://default:...@...:6379' \
 #     EXECUTOR_URL='https://executor.your-domain.dev' \
-#     WEB_ORIGIN='https://codee.your-domain.dev' \
+#     WEB_ORIGIN='https://relay.your-domain.dev' \
 #     GITHUB_CLIENT_ID=... \
 #     GITHUB_CLIENT_SECRET=...
 #
@@ -21,7 +21,7 @@
 # replicates updates anyway — but sticky avoids unnecessary cross-instance
 # traffic and keeps the awareness state consistent).
 
-app = "codee-server"
+app = "relay-server"
 primary_region = "ord"
 
 [build]

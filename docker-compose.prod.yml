@@ -18,12 +18,12 @@ services:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
-    container_name: codee-server
+    container_name: relay-server
     environment:
       NODE_ENV: production
       PORT: "4000"
       MONGO_URL: mongodb://mongo:27017
-      MONGO_DB: codee
+      MONGO_DB: relay
       REDIS_URL: redis://redis:6379
       EXECUTOR_URL: http://executor:4100
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost}
@@ -45,7 +45,7 @@ services:
     build:
       context: .
       dockerfile: apps/executor/Dockerfile
-    container_name: codee-executor
+    container_name: relay-executor
     environment:
       NODE_ENV: production
       PORT: "4100"
@@ -59,7 +59,7 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    container_name: codee-web
+    container_name: relay-web
     ports:
       - "80:80"
     depends_on:

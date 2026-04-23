@@ -1,5 +1,5 @@
 {
-  "name": "codee-runner-node",
+  "name": "relay-runner-node",
   "private": true,
   "version": "1.0.0",
   "description": "Pre-installed packages baked into the JS sandbox image.",

@@ -50,9 +50,7 @@ const LANGUAGES = ['javascript', 'typescript', 'python', 'markdown', 'plaintext'
 
 function Wordmark({ className = '' }: { className?: string }) {
   return (
-    <span className={`wordmark ${className}`}>
-      code<span className="wordmark-accent">E</span>
-    </span>
+    <span className={`wordmark wordmark-accent ${className}`}>Relay</span>
   );
 }
 

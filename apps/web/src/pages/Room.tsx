@@ -118,7 +118,7 @@ export default function Room() {
   const [expected, setExpected] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   const [lastReadCount, setLastReadCount] = useState<number>(() => {
-    const stored = localStorage.getItem(`codee-lastread-${roomId}`);
+    const stored = localStorage.getItem(`relay-lastread-${roomId}`);
     return stored ? parseInt(stored, 10) : 0;
   });
   const [files, setFiles] = useState<string[]>([]);
@@ -370,7 +370,7 @@ export default function Room() {
   useEffect(() => {
     if (chatOpen) {
       setLastReadCount(messages.length);
-      localStorage.setItem(`codee-lastread-${roomId}`, String(messages.length));
+      localStorage.setItem(`relay-lastread-${roomId}`, String(messages.length));
     }
   }, [chatOpen, messages.length, roomId]);
 
@@ -616,9 +616,7 @@ export default function Room() {
         >
           ←
         </a>
-        <span className="wordmark text-sm hidden sm:inline">
-          code<span className="wordmark-accent">E</span>
-        </span>
+        <span className="wordmark wordmark-accent text-sm hidden sm:inline">Relay</span>
         <span className="h-4 w-px bg-white/10 hidden sm:inline-block" />
         <span className="text-sm font-medium truncate max-w-xs text-[color:var(--text-primary)]">
           {roomInfo?.name ?? roomId}

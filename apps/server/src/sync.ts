@@ -18,7 +18,7 @@ const hookedDocs = new WeakSet<Y.Doc>();
 const subscribedRooms = new Set<string>();
 
 export function channelFor(roomId: string): string {
-  return `codee:sync:${roomId}`;
+  return `relay:sync:${roomId}`;
 }
 
 /**
@@ -56,8 +56,8 @@ export function installSyncHandler(): void {
   // ioredis emits messageBuffer for buffer-safe payloads.
   sub.on('messageBuffer', (channelBuf: Buffer, message: Buffer) => {
     const channel = channelBuf.toString('utf8');
-    if (!channel.startsWith('codee:sync:')) return;
-    const roomId = channel.slice('codee:sync:'.length);
+    if (!channel.startsWith('relay:sync:')) return;
+    const roomId = channel.slice('relay:sync:'.length);
 
     const senderId = message.subarray(0, 36).toString('utf8').trim();
     if (senderId === INSTANCE_ID) return;

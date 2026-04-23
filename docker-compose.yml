@@ -1,7 +1,7 @@
 services:
   mongo:
     image: mongo:7
-    container_name: codee-mongo
+    container_name: relay-mongo
     ports:
       - "27017:27017"
     volumes:
@@ -15,7 +15,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: codee-redis
+    container_name: relay-redis
     ports:
       - "6379:6379"
     restart: unless-stopped

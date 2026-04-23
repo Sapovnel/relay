@@ -6,9 +6,9 @@ import { users } from './mongo.js';
 
 const router = express.Router();
 
-const COOKIE_NAME = 'codee_session';
+const COOKIE_NAME = 'relay_session';
 const COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const OAUTH_STATE_COOKIE = 'codee_oauth_state';
+const OAUTH_STATE_COOKIE = 'relay_oauth_state';
 
 export interface SessionUser {
   sub: string;

@@ -3,7 +3,7 @@ import 'dotenv/config';
 export const env = {
   PORT: Number(process.env.PORT ?? 4000),
   MONGO_URL: process.env.MONGO_URL ?? 'mongodb://localhost:27017',
-  MONGO_DB: process.env.MONGO_DB ?? 'codee',
+  MONGO_DB: process.env.MONGO_DB ?? 'relay',
   JWT_SECRET: process.env.JWT_SECRET ?? 'dev-only-not-for-prod',
   GITHUB_CLIENT_ID: process.env.GITHUB_CLIENT_ID ?? '',
   GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET ?? '',

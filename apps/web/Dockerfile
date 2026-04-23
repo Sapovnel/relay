@@ -10,7 +10,7 @@ COPY apps/web/package.json ./apps/web/
 RUN npm ci
 
 COPY apps/web ./apps/web
-RUN npm run build --workspace @codee/web
+RUN npm run build --workspace @relay/web
 
 # ---- runner ----
 FROM nginx:1.27-alpine AS runner
