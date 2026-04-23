@@ -1,6 +1,10 @@
 # Relay — Real-Time Collaborative Code Editor
 
-A browser-based code editor where multiple users edit **and run** code together in real time. Google Docs for code, with a hardened sandbox for execution and a horizontally-scalable sync tier.
+> Google Docs for code, with a hardened Docker sandbox and an AI pair-programmer.
+
+![demo](./demo.gif)
+
+A browser-based code editor where multiple users edit **and run** code together in real time. Hardened sandbox for execution, horizontally-scalable sync tier, Claude-powered AI assist.
 
 ## Features
 
