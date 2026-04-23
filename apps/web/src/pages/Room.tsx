@@ -8,6 +8,18 @@ import { MonacoBinding } from 'y-monaco';
 import { useAuth } from '../auth/AuthProvider';
 import { CommandPalette, type Command } from '../components/CommandPalette';
 import { ShortcutsHelp } from '../components/ShortcutsHelp';
+import { AIChat } from '../ai/AIChat';
+import { AISettings } from '../ai/AISettings';
+import { registerGhostCompletions, isGhostEnabled } from '../ai/ghost';
+import {
+  explainPrompt,
+  fixPrompt,
+  refactorPrompt,
+  addTypesPrompt,
+  askPrompt,
+  type CodeContext,
+} from '../ai/prompts';
+import { hasApiKey } from '../ai/client';
 
 const WS_URL = ((): string => {
   const fromEnv = import.meta.env.VITE_WS_URL as string | undefined;
@@ -121,8 +133,15 @@ export default function Room() {
     const stored = localStorage.getItem(`relay-lastread-${roomId}`);
     return stored ? parseInt(stored, 10) : 0;
   });
+  const [sidebarTab, setSidebarTab] = useState<'people' | 'ai'>('people');
+  const [aiPending, setAiPending] = useState<string | null>(null);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
+  const activeFileRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeFileRef.current = activeFile;
+  }, [activeFile]);
 
   const docRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<WebsocketProvider | null>(null);
@@ -670,11 +689,35 @@ export default function Room() {
           ↓ download
         </button>
         <button
-          onClick={() => setChatOpen((v) => !v)}
+          onClick={() => {
+            setChatOpen(true);
+            setSidebarTab('ai');
+          }}
+          className="btn-secondary"
+          title="AI pair programmer"
+        >
+          ✦ AI
+        </button>
+        <button
+          onClick={() => setAiSettingsOpen(true)}
+          className="btn-secondary"
+          title="AI settings"
+        >
+          ⚙
+        </button>
+        <button
+          onClick={() => {
+            if (chatOpen && sidebarTab === 'people') {
+              setChatOpen(false);
+            } else {
+              setChatOpen(true);
+              setSidebarTab('people');
+            }
+          }}
           className="btn-secondary relative"
         >
-          {chatOpen ? 'Hide chat' : 'Chat'}
-          {!chatOpen && unreadChat > 0 && (
+          {chatOpen && sidebarTab === 'people' ? 'Hide chat' : 'Chat'}
+          {!(chatOpen && sidebarTab === 'people') && unreadChat > 0 && (
             <span
               className="absolute -top-1 -right-1 inline-flex h-4 min-w-4 px-1 items-center justify-center rounded-full text-[10px] font-bold text-white"
               style={{ backgroundColor: 'var(--accent)' }}
@@ -814,6 +857,99 @@ export default function Room() {
                   monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP,
                   () => setPaletteOpen(true),
                 );
+
+                // Build a CodeContext from the editor's current state. Prefer
+                // the selection; fall back to the whole file.
+                const buildCtx = (): CodeContext | null => {
+                  const model = editor.getModel();
+                  const fileName = activeFileRef.current;
+                  if (!model || !fileName) return null;
+                  const full = model.getValue();
+                  const sel = editor.getSelection();
+                  let selection: string | undefined;
+                  let range: { start: number; end: number } | undefined;
+                  if (sel && !sel.isEmpty()) {
+                    selection = model.getValueInRange(sel);
+                    range = {
+                      start: model.getOffsetAt(sel.getStartPosition()),
+                      end: model.getOffsetAt(sel.getEndPosition()),
+                    };
+                  }
+                  return {
+                    language: model.getLanguageId(),
+                    fileName,
+                    fullFile: full,
+                    selection,
+                    selectionRange: range,
+                  };
+                };
+
+                const fireAi = (promptFn: (ctx: CodeContext) => string) => {
+                  const ctx = buildCtx();
+                  if (!ctx) return;
+                  if (!hasApiKey()) {
+                    setAiSettingsOpen(true);
+                    return;
+                  }
+                  setChatOpen(true);
+                  setSidebarTab('ai');
+                  setAiPending(promptFn(ctx));
+                };
+
+                editor.addAction({
+                  id: 'relay.ai.explain',
+                  label: 'AI: Explain selection',
+                  contextMenuGroupId: 'relay-ai',
+                  contextMenuOrder: 1,
+                  run: () => fireAi(explainPrompt),
+                });
+                editor.addAction({
+                  id: 'relay.ai.fix',
+                  label: 'AI: Find bugs / fix',
+                  contextMenuGroupId: 'relay-ai',
+                  contextMenuOrder: 2,
+                  run: () => fireAi(fixPrompt),
+                });
+                editor.addAction({
+                  id: 'relay.ai.refactor',
+                  label: 'AI: Refactor',
+                  contextMenuGroupId: 'relay-ai',
+                  contextMenuOrder: 3,
+                  run: () => fireAi(refactorPrompt),
+                });
+                editor.addAction({
+                  id: 'relay.ai.types',
+                  label: 'AI: Add / tighten types',
+                  contextMenuGroupId: 'relay-ai',
+                  contextMenuOrder: 4,
+                  run: () => fireAi(addTypesPrompt),
+                });
+                editor.addAction({
+                  id: 'relay.ai.ask',
+                  label: 'AI: Ask about selection…',
+                  contextMenuGroupId: 'relay-ai',
+                  contextMenuOrder: 5,
+                  keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI],
+                  run: () => {
+                    const ctx = buildCtx();
+                    if (!ctx) return;
+                    const q = prompt('Ask Claude about this code:');
+                    if (!q) return;
+                    if (!hasApiKey()) {
+                      setAiSettingsOpen(true);
+                      return;
+                    }
+                    setChatOpen(true);
+                    setSidebarTab('ai');
+                    setAiPending(askPrompt(ctx, q));
+                  },
+                });
+
+                // Ghost-text autocomplete. Self-disposes when disabled in settings.
+                registerGhostCompletions(monaco, editor, {
+                  getFileName: () => activeFileRef.current,
+                  isEnabled: () => isGhostEnabled(),
+                });
               }}
               options={{
                 fontSize: 14,
@@ -827,7 +963,7 @@ export default function Room() {
         {chatOpen && (
           <aside
             style={{
-              width: 300,
+              width: 320,
               flexShrink: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -835,48 +971,77 @@ export default function Room() {
               background: 'var(--bg-surface)',
             }}
           >
-            <div className="px-3 py-2.5 border-b border-white/[0.06] text-xs font-medium text-[color:var(--text-secondary)] uppercase tracking-wide">
-              Chat · {messages.length}
-            </div>
-            <div style={{ flex: 1, overflow: 'auto' }} className="p-3 space-y-3">
-              {messages.length === 0 ? (
-                <p className="text-xs text-[color:var(--text-tertiary)]">
-                  No messages yet. Press Enter to send.
-                </p>
-              ) : (
-                messages.map((m) => (
-                  <div key={m.id}>
-                    <div className="text-xs font-semibold mb-0.5" style={{ color: m.color }}>
-                      {m.author}
-                    </div>
-                    <div className="text-sm wrap-break-word whitespace-pre-wrap text-[color:var(--text-primary)]">
-                      {m.body}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="p-2 flex gap-1.5 border-t border-white/[0.06]">
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMsg();
-                  }
-                }}
-                placeholder="Message…"
-                className="input-field flex-1 !py-1.5 !text-xs"
-              />
+            <div className="flex border-b border-white/[0.06]">
               <button
-                onClick={sendMsg}
-                disabled={!draft.trim()}
-                className="btn-primary !py-1.5 !px-3 !text-xs"
+                onClick={() => setSidebarTab('people')}
+                className={`flex-1 px-3 py-2.5 text-xs font-medium uppercase tracking-wide transition ${
+                  sidebarTab === 'people'
+                    ? 'text-[color:var(--text-primary)] border-b-2 border-[color:var(--accent)]'
+                    : 'text-[color:var(--text-tertiary)] hover:text-[color:var(--text-secondary)]'
+                }`}
               >
-                send
+                People {messages.length > 0 && `· ${messages.length}`}
+              </button>
+              <button
+                onClick={() => setSidebarTab('ai')}
+                className={`flex-1 px-3 py-2.5 text-xs font-medium uppercase tracking-wide transition ${
+                  sidebarTab === 'ai'
+                    ? 'text-[color:var(--text-primary)] border-b-2 border-[color:var(--accent)]'
+                    : 'text-[color:var(--text-tertiary)] hover:text-[color:var(--text-secondary)]'
+                }`}
+              >
+                ✦ AI
               </button>
             </div>
+            {sidebarTab === 'people' ? (
+              <>
+                <div style={{ flex: 1, overflow: 'auto' }} className="p-3 space-y-3">
+                  {messages.length === 0 ? (
+                    <p className="text-xs text-[color:var(--text-tertiary)]">
+                      No messages yet. Press Enter to send.
+                    </p>
+                  ) : (
+                    messages.map((m) => (
+                      <div key={m.id}>
+                        <div className="text-xs font-semibold mb-0.5" style={{ color: m.color }}>
+                          {m.author}
+                        </div>
+                        <div className="text-sm wrap-break-word whitespace-pre-wrap text-[color:var(--text-primary)]">
+                          {m.body}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="p-2 flex gap-1.5 border-t border-white/[0.06]">
+                  <input
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMsg();
+                      }
+                    }}
+                    placeholder="Message…"
+                    className="input-field flex-1 !py-1.5 !text-xs"
+                  />
+                  <button
+                    onClick={sendMsg}
+                    disabled={!draft.trim()}
+                    className="btn-primary !py-1.5 !px-3 !text-xs"
+                  >
+                    send
+                  </button>
+                </div>
+              </>
+            ) : (
+              <AIChat
+                pendingMessage={aiPending}
+                onPendingConsumed={() => setAiPending(null)}
+                onNeedApiKey={() => setAiSettingsOpen(true)}
+              />
+            )}
           </aside>
         )}
       </div>
@@ -1050,6 +1215,10 @@ export default function Room() {
         placeholder="Type a command, or a language…"
       />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <AISettings
+        open={aiSettingsOpen}
+        onClose={() => setAiSettingsOpen(false)}
+      />
     </div>
   );
 }
