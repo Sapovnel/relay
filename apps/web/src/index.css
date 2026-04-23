@@ -175,6 +175,16 @@ body::before {
   background: rgba(52, 211, 153, 0.03);
 }
 
+/* Dropdown options inherit OS defaults (white/black) — force dark to match. */
+option {
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+}
+option:checked,
+option:hover {
+  background-color: var(--bg-surface-2);
+}
+
 .wordmark {
   letter-spacing: -0.04em;
   font-weight: 700;
